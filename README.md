@@ -65,7 +65,7 @@ wget -q https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/ma
 1) HTTP 标准 HTTP 代理 http://user:pass@ip:port
 2) SOCKS5 标准 SOCKS5 代理 socks5://user:pass@ip:port
 3) 自适应 同一端口同时支持 HTTP 和 SOCKS5（推荐） http://user:pass@ip:port 或 socks5://user:pass@ip:port
-4) 无加密 无认证、无加密，协议自适应 ip:port
+4) 无加密 无认证、无加密，协议自适应 (HTTP/SOCKS5/ProxyIP 自动识别) ip:port
 
 开机自启机制
 
