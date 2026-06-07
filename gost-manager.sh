@@ -54,7 +54,7 @@ setup_workspace() {
 }
 setup_workspace
 
-# 检测系统架构
+# 检测系统架构（修复：强制识别 arm64）
 detect_os_arch() {
     if [[ "$(uname)" == "Linux" ]]; then
         os="linux"
@@ -71,6 +71,8 @@ detect_os_arch() {
         i686|i386) cpu_arch="386" ;;
         *) cpu_arch="amd64" ;;
     esac
+    # 调试输出（可选，安装时显示）
+    echo -e "${GREEN}检测到系统: ${os}, 架构: ${cpu_arch}${NC}" >&2
 }
 
 # 版本比较函数：是否 >= 2.12（新格式从此版本开始）
@@ -111,19 +113,17 @@ install_gost_v2() {
     # 如果新格式失败或版本 < 2.12，尝试旧格式 .gz（v2.11.x 及以下）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
-        # 根据用户提供的列表构造 URL
         local gz_urls=(
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
         )
-        # 针对 arm 的特殊命名（armv5/6/7/8）
+        # 针对 arm 的特殊命名
         if [[ "$cpu_arch" =~ ^armv[5-8]$ ]] || [[ "$cpu_arch" == "arm64" ]]; then
             gz_urls+=(
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
             )
         fi
-        # 去重（简单处理，不影响功能）
         for url in "${gz_urls[@]}"; do
             echo -e "      尝试: ${url}"
             if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
@@ -451,7 +451,7 @@ show_menu() {
 
 # 主程序
 main() {
-    detect_os_arch
+    detect_os_arch  # 这里会输出架构信息
     while true; do
         show_menu
         read choice
