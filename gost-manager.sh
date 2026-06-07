@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-# ============================================
-# GOST 一键管理脚本（支持 Linux/FreeBSD/macOS/Alpine）
-# ============================================
-
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -11,80 +7,74 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 全局变量
-is_alpine=0
-
-# ==================== 系统检测 ====================
+# 获取本机 IP（兼容 BusyBox）
 get_local_ip() {
-    if command -v ip >/dev/null 2>&1; then
-        ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2
-    elif command -v ifconfig >/dev/null 2>&1; then
-        ifconfig | grep -E 'inet (addr:)?([0-9]+\.){3}[0-9]+' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d: -f2
-    else
-        hostname -i 2>/dev/null | awk '{print $1}'
+    local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
+    if [ -z "$ip" ]; then
+        ip=$(hostname -i 2>/dev/null | awk '{print $1}')
     fi
+    if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
+        ip="$(hostname)"
+    fi
+    echo "$ip"
 }
 
-detect_os_arch() {
-    local kernel=$(uname -s)
-    case "$kernel" in
-        Linux)     os="linux" ;;
-        FreeBSD)   os="freebsd" ;;
-        Darwin)    os="darwin" ;;
-        MINGW*|CYGWIN*|MSYS*) os="windows" ;;
-        *)         os="linux" ;;
-    esac
-
-    # 检测 Alpine Linux (musl libc)
-    if [ -f /etc/alpine-release ]; then
-        is_alpine=1
-        echo -e "${YELLOW}检测到 Alpine Linux (musl libc)，将使用旧格式兼容二进制${NC}" >&2
-    fi
-
-    local arch=$(uname -m)
-    case "$arch" in
-        x86_64|amd64)      cpu_arch="amd64" ;;
-        aarch64|arm64)     cpu_arch="arm64" ;;
-        armv7l|armv7)      cpu_arch="armv7" ;;
-        i386|i686)         cpu_arch="386" ;;
-        *)                 cpu_arch="amd64" ;;
-    esac
-
-    echo -e "${GREEN}检测到系统: ${os} (${kernel}), 架构: ${cpu_arch}${NC}" >&2
-}
-
+# 自动检测并设置工作目录（root/普通用户）
 setup_workspace() {
-    local CURRENT_USER=$(whoami)
+    CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
         if [[ -n "$SUDO_USER" ]]; then
-            WORK_HOME="/home/$SUDO_USER"
+            NORMAL_USER="$SUDO_USER"
         elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
-            WORK_HOME="/home/$USER"
+            NORMAL_USER="$USER"
+        else
+            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null)
+        fi
+        if [[ -n "$NORMAL_USER" ]]; then
+            WORK_HOME="/home/$NORMAL_USER"
+            echo -e "${YELLOW}检测到 root 用户，使用: ${WORK_HOME}${NC}"
         else
             WORK_HOME="$PWD"
         fi
     else
         WORK_HOME="$HOME"
     fi
-
     GOST_DIR="$WORK_HOME/GOST"
-    mkdir -p "$GOST_DIR" 2>/dev/null || {
-        GOST_DIR="/tmp/GOST_${CURRENT_USER}"
-        mkdir -p "$GOST_DIR"
-        echo -e "${YELLOW}使用备用目录: ${GOST_DIR}${NC}"
-    }
+    if [[ ! -d "$GOST_DIR" ]]; then
+        mkdir -p "$GOST_DIR" 2>/dev/null || {
+            GOST_DIR="/tmp/GOST_${CURRENT_USER}"
+            mkdir -p "$GOST_DIR"
+            echo -e "${YELLOW}使用备用目录: ${GOST_DIR}${NC}"
+        }
+    fi
     GOST_BIN="$GOST_DIR/gost"
     GOST_LOG="$GOST_DIR/gost.log"
     GOST_PID_FILE="$GOST_DIR/gost.pid"
     echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
 }
+setup_workspace
 
-# ==================== 版本比较（Alpine 强制使用旧格式） ====================
-version_ge_2_12() {
-    # Alpine 系统不尝试新格式（新格式多为 glibc 动态链接，不兼容 musl）
-    if [ "$is_alpine" -eq 1 ]; then
-        return 1
+# 检测系统架构
+detect_os_arch() {
+    if [[ "$(uname)" == "Linux" ]]; then
+        os="linux"
+    elif [[ "$(uname)" == "Darwin" ]]; then
+        os="darwin"
+    else
+        os="linux"
     fi
+    arch=$(uname -m)
+    case $arch in
+        x86_64|amd64) cpu_arch="amd64" ;;
+        aarch64|arm64) cpu_arch="arm64" ;;
+        armv7l|armv7) cpu_arch="armv7" ;;
+        i686|i386) cpu_arch="386" ;;
+        *) cpu_arch="amd64" ;;
+    esac
+}
+
+# 版本比较函数：是否 >= 2.12（新格式从此版本开始）
+version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
     local minor=$(echo "$v" | cut -d. -f2)
@@ -93,49 +83,47 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# ==================== 安装 v2（智能新旧格式） ====================
+# 安装 GOST v2（智能选择新旧格式）
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
-    cd "$GOST_DIR" || return 1
+    cd "$GOST_DIR" || { echo -e "${RED}无法进入目录${NC}"; return 1; }
     rm -f gost gost.tar.gz gost.gz
-
+    
     local downloaded=0
-
-    # 尝试新格式（仅当版本 >=2.12 且不是 Alpine）
+    
+    # 新格式（>= 2.12.0）
     if version_ge_2_12 "$version"; then
         local tar_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost_${version}_${os}_${cpu_arch}.tar.gz"
         echo -e "      尝试新格式: ${tar_url}"
         if wget -q --timeout=15 -O gost.tar.gz "$tar_url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$tar_url" -o gost.tar.gz 2>/dev/null; then
             if [ -f "gost.tar.gz" ] && [ -s "gost.tar.gz" ]; then
                 tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz 2>/dev/null
-                [ -f "gost" ] && downloaded=1 && echo -e "${GREEN}      下载成功（新格式 .tar.gz）${NC}"
+                if [ -f "gost" ]; then
+                    downloaded=1
+                    echo -e "${GREEN}      下载成功（新格式 .tar.gz）${NC}"
+                fi
             fi
         fi
     fi
-
-    # 旧格式 .gz（兼容 v2.11.x 及以下，以及 Alpine 强制使用）
+    
+    # 如果新格式失败或版本 < 2.12，尝试旧格式 .gz（v2.11.x 及以下）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
+        # 根据用户提供的列表构造 URL
         local gz_urls=(
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
         )
-        # FreeBSD 特殊命名
-        if [[ "$os" == "freebsd" ]]; then
-            gz_urls=(
-                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
-                "${gz_urls[@]}"
-            )
-        fi
-        # ARM 特殊处理
+        # 针对 arm 的特殊命名（armv5/6/7/8）
         if [[ "$cpu_arch" =~ ^armv[5-8]$ ]] || [[ "$cpu_arch" == "arm64" ]]; then
             gz_urls+=(
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
             )
         fi
+        # 去重（简单处理，不影响功能）
         for url in "${gz_urls[@]}"; do
             echo -e "      尝试: ${url}"
             if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
@@ -148,12 +136,12 @@ install_gost_v2() {
             fi
         done
     fi
-
+    
     if [ $downloaded -eq 0 ]; then
         echo -e "${RED}所有下载方式均失败，请手动安装${NC}"
         return 1
     fi
-
+    
     chmod +x gost
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         echo -e "${GREEN}✓ GOST v2 ${version} 安装成功！${NC}"
@@ -165,7 +153,7 @@ install_gost_v2() {
     fi
 }
 
-# ==================== 安装 v3（统一 tar.gz） ====================
+# 安装 GOST v3
 install_gost_v3() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -188,7 +176,7 @@ install_gost_v3() {
     return 1
 }
 
-# ==================== 版本列表获取 ====================
+# 获取 v2 版本列表
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
@@ -209,6 +197,7 @@ get_v2_versions() {
     done
 }
 
+# 获取 v3 版本列表
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
@@ -228,6 +217,7 @@ get_v3_versions() {
     done
 }
 
+# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
@@ -246,7 +236,7 @@ select_version_to_install() {
     esac
 }
 
-# ==================== 代理管理 ====================
+# 停止 GOST
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
         echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
@@ -257,6 +247,7 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
+# 启动代理
 start_gost() {
     local protocol=$1
     local port=$2
@@ -306,6 +297,7 @@ start_gost() {
     fi
 }
 
+# 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -332,6 +324,7 @@ EOF
     echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
+# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}正在卸载 GOST...${NC}"
     stop_gost
@@ -340,6 +333,7 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
+# 配置代理流程
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
         echo -e "${RED}请先安装 GOST${NC}"
@@ -386,6 +380,7 @@ configure_proxy() {
     read -n 1
 }
 
+# 显示状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
@@ -408,12 +403,15 @@ show_status() {
     read -n 1
 }
 
+# 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
     echo -e "${BLUE}========================================${NC}"
+    
     local script_url="https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh"
     local temp_script="/tmp/gost-manager-update.sh"
+    
     echo -e "${YELLOW}正在从远程仓库下载最新脚本...${NC}"
     if wget -q --timeout=10 -O "$temp_script" "$script_url" 2>/dev/null || curl -fsSL --connect-timeout 10 "$script_url" -o "$temp_script" 2>/dev/null; then
         if [ -s "$temp_script" ]; then
@@ -435,6 +433,7 @@ update_script() {
     read -n 1
 }
 
+# 主菜单
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -450,10 +449,9 @@ show_menu() {
     echo -n -e "${YELLOW}请输入 [0-5]: ${NC}"
 }
 
-# ==================== 主程序 ====================
+# 主程序
 main() {
     detect_os_arch
-    setup_workspace
     while true; do
         show_menu
         read choice
