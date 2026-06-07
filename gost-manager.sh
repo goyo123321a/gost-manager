@@ -82,7 +82,7 @@ detect_os_arch() {
     esac
 }
 
-# 安装 GOST v2（修复下载地址）
+# 安装 GOST v2（支持 v2.12.0）
 install_gost_v2() {
     local version=$1
     
@@ -96,7 +96,7 @@ install_gost_v2() {
     
     rm -f gost gost.gz
     
-    # v2 官方可能的文件名列表
+    # v2 官方可能的文件名列表（包含 armv8 等常见命名）
     local download_urls=(
         "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
         "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-amd64-${version}.gz"
@@ -169,12 +169,17 @@ install_gost_v3() {
     return 1
 }
 
-# 获取 v2 版本列表
+# 获取 v2 版本列表（包含最新 v2.12.0）
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
-    local versions=$(curl -s "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
+    
+    # 尝试从 GitHub API 获取最新的 10 个版本
+    local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
+    
+    # 如果 API 获取失败，使用备用硬编码列表（已更新 v2.12.0 为最新）
     if [[ -z "$versions" ]]; then
-        versions="2.11.5 2.11.4 2.11.3 2.11.2 2.11.1"
+        echo -e "${YELLOW}注意：无法从 GitHub API 获取版本列表，正在加载备用列表...${NC}"
+        versions="2.12.0 2.11.5 2.11.4 2.11.3 2.11.2 2.11.1 2.11.0"
     fi
     
     echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
