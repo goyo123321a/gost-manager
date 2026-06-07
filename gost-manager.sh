@@ -37,49 +37,25 @@ detect_os() {
     esac
 }
 
-# 获取最新版本（多源获取，确保成功）
-get_latest_version() {
-    local version=""
-    
-    # 方法1: 从 ginuerzh/gost 获取
-    version=$(curl -fsSL https://api.github.com/repos/ginuerzh/gost/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
-    
-    # 方法2: 从 go-gost/gost 获取
-    if [ -z "$version" ]; then
-        version=$(curl -fsSL https://api.github.com/repos/go-gost/gost/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
-    fi
-    
-    # 方法3: 使用已知稳定版本
-    if [ -z "$version" ]; then
-        version="2.11.5"
-        echo -e "${YELLOW}⚠ 无法获取最新版本，使用稳定版本: ${version}${NC}"
-    else
-        echo -e "${GREEN}✓ 获取到最新版本: ${version}${NC}"
-    fi
-    
-    echo "$version"
-}
-
-# 下载并安装 GOST（自动选择最新版）
+# 安装 GOST（直接使用 latest）
 install_gost() {
-    local version=${1:-$(get_latest_version)}
     local os=$(detect_os)
     local arch=$(detect_arch)
     
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}        GOST 一键安装${NC}"
+    echo -e "${GREEN}        GOST 一键安装 (Latest)${NC}"
     echo -e "${BLUE}========================================${NC}"
     
-    echo -e "${YELLOW}[1/5] 创建目录...${NC}"
+    echo -e "${YELLOW}[1/4] 创建目录...${NC}"
     mkdir -p "$GOST_DIR"
     cd "$GOST_DIR" || return 1
     
-    echo -e "${YELLOW}[2/5] 系统: ${os}/${arch}${NC}"
-    echo -e "${YELLOW}[3/5] 版本: ${version} (最新)${NC}"
+    echo -e "${YELLOW}[2/4] 系统: ${os}/${arch}${NC}"
+    echo -e "${YELLOW}[3/4] 版本: Latest${NC}"
     
-    # 构建下载 URL（使用 ginuerzh/gost）
-    local download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${arch}-${version}.gz"
-    echo -e "${YELLOW}[4/5] 下载中...${NC}"
+    # 使用 latest 直接下载
+    local download_url="https://github.com/ginuerzh/gost/releases/latest/download/gost-${os}-${arch}.gz"
+    echo -e "${YELLOW}下载地址: ${download_url}${NC}"
     
     # 尝试下载
     if curl -fsSL -o gost.gz "$download_url" 2>/dev/null || wget -q "$download_url" -O gost.gz 2>/dev/null; then
@@ -87,9 +63,9 @@ install_gost() {
         chmod +x gost
         echo -e "${GREEN}✓ 下载成功${NC}"
     else
-        # 备用格式
-        local url2="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${arch}.gz"
-        echo -e "${YELLOW}尝试备用格式...${NC}"
+        # 备用格式（带版本号的格式）
+        echo -e "${YELLOW}尝试备用地址...${NC}"
+        local url2="https://github.com/ginuerzh/gost/releases/latest/download/gost-${os}-${arch}-latest.gz"
         if curl -fsSL -o gost.gz "$url2" 2>/dev/null || wget -q "$url2" -O gost.gz 2>/dev/null; then
             gunzip -f gost.gz 2>/dev/null
             chmod +x gost
@@ -100,11 +76,12 @@ install_gost() {
         fi
     fi
     
-    echo -e "${YELLOW}[5/5] 清理...${NC}"
+    echo -e "${YELLOW}[4/4] 清理...${NC}"
     rm -f gost.gz
     
     if [ -f "$GOST_BIN" ]; then
-        echo -e "${GREEN}✓ GOST ${version} 安装成功！${NC}"
+        echo -e "${GREEN}✓ GOST (Latest) 安装成功！${NC}"
+        "$GOST_BIN" -V 2>/dev/null || echo -e "${GREEN}GOST 已就绪${NC}"
         return 0
     else
         echo -e "${RED}✗ 安装失败${NC}"
@@ -274,7 +251,7 @@ uninstall_gost() {
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
-        echo -e "${GREEN}GOST: 已安装${NC}"
+        echo -e "${GREEN}GOST: 已安装 (Latest)${NC}"
         if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
             local pid=$(pgrep -f "$GOST_BIN" | head -1)
             echo -e "${GREEN}状态: 运行中 (PID: $pid)${NC}"
@@ -293,7 +270,7 @@ show_menu() {
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║     GOST Manager for Serv00         ║${NC}"
     echo -e "${BLUE}╠══════════════════════════════════════╣${NC}"
-    echo -e "${BLUE}║  ${GREEN}1${BLUE}) 安装 GOST (自动最新版)        ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}1${BLUE}) 安装 GOST (Latest)              ║${NC}"
     echo -e "${BLUE}║  ${GREEN}3${BLUE}) 配置代理                      ║${NC}"
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 查看状态                      ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 停止 GOST                     ║${NC}"
@@ -310,9 +287,7 @@ main() {
         read -r choice
         case $choice in
             1) 
-                echo -e "${YELLOW}正在获取最新版本...${NC}"
-                install_gost
-                if [ $? -eq 0 ]; then
+                if install_gost; then
                     echo -n -e "${GREEN}按任意键配置代理...${NC}"
                     read -n 1
                     configure_proxy
