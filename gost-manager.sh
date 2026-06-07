@@ -77,7 +77,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 v2
+# 安装 v2（完全兼容旧版本的各种命名）
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -97,15 +97,66 @@ install_gost_v2() {
         fi
     fi
 
+    # 旧格式 .gz：根据官方文件列表生成多种可能的 URL
     if [ $downloaded -eq 0 ]; then
-        local gz_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
-        echo -e "      尝试: ${gz_url}"
-        if wget -q --timeout=15 -O gost.gz "$gz_url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$gz_url" -o gost.gz 2>/dev/null; then
-            if [ -f "gost.gz" ] && [ -s "gost.gz" ] && gunzip -t gost.gz 2>/dev/null; then
-                gunzip -f gost.gz
-                downloaded=1
-            fi
+        echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
+        local gz_urls=()
+
+        # 通用模式
+        gz_urls+=(
+            "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
+            "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
+        )
+
+        # 针对 Linux 各架构的特殊命名（armv5/6/7/8, mips, riscv64, s390x 等）
+        if [[ "$os" == "linux" ]]; then
+            case "$cpu_arch" in
+                amd64)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-amd64-${version}.gz")
+                    ;;
+                arm64)
+                    gz_urls+=(
+                        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
+                        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
+                    )
+                    ;;
+                armv7)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv7-${version}.gz")
+                    ;;
+                armv5|armv6|armv7)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz")
+                    ;;
+                386)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-386-${version}.gz")
+                    ;;
+            esac
         fi
+
+        # 针对 FreeBSD 的特殊命名
+        if [[ "$os" == "freebsd" ]]; then
+            gz_urls+=(
+                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
+                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
+            )
+        fi
+
+        # 针对 macOS (Darwin)
+        if [[ "$os" == "darwin" ]]; then
+            gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-darwin-${cpu_arch}-${version}.gz")
+        fi
+
+        # 去重并尝试下载
+        for url in "${gz_urls[@]}"; do
+            echo -e "      尝试: ${url}"
+            if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
+                if [ -f "gost.gz" ] && [ -s "gost.gz" ] && gunzip -t gost.gz 2>/dev/null; then
+                    gunzip -f gost.gz
+                    downloaded=1
+                    echo -e "${GREEN}      下载成功${NC}"
+                    break
+                fi
+            fi
+        done
     fi
 
     if [ $downloaded -eq 0 ]; then
