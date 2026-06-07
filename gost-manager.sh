@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# GOST Manager for Serv00 (no root required)
+# GOST Manager for Serv00 (官方版优先，旧版备用)
 
 # 颜色定义
 RED='\033[0;31m'
@@ -37,54 +37,88 @@ detect_os() {
     esac
 }
 
-# 安装 GOST（直接使用 latest）
+# 安装 GOST（官方版优先，旧版备用）
 install_gost() {
     local os=$(detect_os)
     local arch=$(detect_arch)
     
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}        GOST 一键安装 (Latest)${NC}"
+    echo -e "${GREEN}        GOST 一键安装${NC}"
     echo -e "${BLUE}========================================${NC}"
     
-    echo -e "${YELLOW}[1/4] 创建目录...${NC}"
+    echo -e "${YELLOW}[1/5] 创建目录...${NC}"
     mkdir -p "$GOST_DIR"
     cd "$GOST_DIR" || return 1
     
-    echo -e "${YELLOW}[2/4] 系统: ${os}/${arch}${NC}"
-    echo -e "${YELLOW}[3/4] 版本: Latest${NC}"
+    echo -e "${YELLOW}[2/5] 系统: ${os}/${arch}${NC}"
     
-    # 使用 latest 直接下载
-    local download_url="https://github.com/ginuerzh/gost/releases/latest/download/gost-${os}-${arch}.gz"
-    echo -e "${YELLOW}下载地址: ${download_url}${NC}"
+    local success=0
     
-    # 尝试下载
-    if curl -fsSL -o gost.gz "$download_url" 2>/dev/null || wget -q "$download_url" -O gost.gz 2>/dev/null; then
-        gunzip -f gost.gz 2>/dev/null
-        chmod +x gost
-        echo -e "${GREEN}✓ 下载成功${NC}"
+    # ========== 方法1: go-gost/gost 官方最新版 ==========
+    echo -e "${YELLOW}[3/5] 尝试官方版 (go-gost/gost)...${NC}"
+    local url1="https://github.com/go-gost/gost/releases/latest/download/gost_${os}_${arch}.tar.gz"
+    echo -e "      地址: ${url1}"
+    
+    if curl -fsSL -o gost.tar.gz "$url1" 2>/dev/null || wget -q "$url1" -O gost.tar.gz 2>/dev/null; then
+        tar -xzf gost.tar.gz 2>/dev/null
+        chmod +x gost 2>/dev/null
+        rm -f gost.tar.gz
+        if [ -f "$GOST_BIN" ]; then
+            echo -e "${GREEN}✓ 官方版安装成功！${NC}"
+            "$GOST_BIN" -V 2>/dev/null | head -1 || echo -e "${GREEN}GOST (go-gost) 已就绪${NC}"
+            success=1
+        fi
     else
-        # 备用格式（带版本号的格式）
-        echo -e "${YELLOW}尝试备用地址...${NC}"
-        local url2="https://github.com/ginuerzh/gost/releases/latest/download/gost-${os}-${arch}-latest.gz"
+        echo -e "${YELLOW}⚠ 官方版下载失败，尝试备用源...${NC}"
+    fi
+    
+    # ========== 方法2: ginuerzh/gost 旧版（备用） ==========
+    if [ $success -eq 0 ]; then
+        echo -e "${YELLOW}[4/5] 尝试备用版 (ginuerzh/gost)...${NC}"
+        local url2="https://github.com/ginuerzh/gost/releases/latest/download/gost-${os}-${arch}.gz"
+        echo -e "      地址: ${url2}"
+        
         if curl -fsSL -o gost.gz "$url2" 2>/dev/null || wget -q "$url2" -O gost.gz 2>/dev/null; then
             gunzip -f gost.gz 2>/dev/null
             chmod +x gost
-            echo -e "${GREEN}✓ 下载成功${NC}"
+            rm -f gost.gz
+            if [ -f "$GOST_BIN" ]; then
+                echo -e "${GREEN}✓ 备用版安装成功！${NC}"
+                "$GOST_BIN" -V 2>/dev/null | head -1 || echo -e "${GREEN}GOST (ginuerzh) 已就绪${NC}"
+                success=1
+            fi
         else
-            echo -e "${RED}✗ 下载失败${NC}"
-            return 1
+            echo -e "${RED}✗ 备用版也下载失败${NC}"
         fi
     fi
     
-    echo -e "${YELLOW}[4/4] 清理...${NC}"
-    rm -f gost.gz
+    # ========== 方法3: 指定版本 v2.11.5（最后备用） ==========
+    if [ $success -eq 0 ]; then
+        echo -e "${YELLOW}[5/5] 尝试稳定版 v2.11.5...${NC}"
+        local url3="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-${os}-${arch}-2.11.5.gz"
+        echo -e "      地址: ${url3}"
+        
+        if curl -fsSL -o gost.gz "$url3" 2>/dev/null || wget -q "$url3" -O gost.gz 2>/dev/null; then
+            gunzip -f gost.gz 2>/dev/null
+            chmod +x gost
+            rm -f gost.gz
+            if [ -f "$GOST_BIN" ]; then
+                echo -e "${GREEN}✓ 稳定版 v2.11.5 安装成功！${NC}"
+                success=1
+            fi
+        else
+            echo -e "${RED}✗ 所有下载源均失败${NC}"
+        fi
+    fi
     
-    if [ -f "$GOST_BIN" ]; then
-        echo -e "${GREEN}✓ GOST (Latest) 安装成功！${NC}"
-        "$GOST_BIN" -V 2>/dev/null || echo -e "${GREEN}GOST 已就绪${NC}"
+    # 清理临时文件
+    rm -f gost.gz gost.tar.gz 2>/dev/null
+    
+    if [ $success -eq 1 ]; then
+        echo -e "${GREEN}✓ GOST 安装成功！${NC}"
         return 0
     else
-        echo -e "${RED}✗ 安装失败${NC}"
+        echo -e "${RED}✗ 安装失败，请检查网络连接${NC}"
         return 1
     fi
 }
@@ -251,7 +285,9 @@ uninstall_gost() {
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
-        echo -e "${GREEN}GOST: 已安装 (Latest)${NC}"
+        echo -e "${GREEN}GOST: 已安装${NC}"
+        local version=$("$GOST_BIN" -V 2>/dev/null | head -1 | cut -d' ' -f2 | tr -d '()')
+        [ -n "$version" ] && echo -e "${GREEN}版本: ${version}${NC}"
         if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
             local pid=$(pgrep -f "$GOST_BIN" | head -1)
             echo -e "${GREEN}状态: 运行中 (PID: $pid)${NC}"
@@ -270,7 +306,7 @@ show_menu() {
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║     GOST Manager for Serv00         ║${NC}"
     echo -e "${BLUE}╠══════════════════════════════════════╣${NC}"
-    echo -e "${BLUE}║  ${GREEN}1${BLUE}) 安装 GOST (Latest)              ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}1${BLUE}) 安装 GOST (官方版/备用)        ║${NC}"
     echo -e "${BLUE}║  ${GREEN}3${BLUE}) 配置代理                      ║${NC}"
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 查看状态                      ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 停止 GOST                     ║${NC}"
