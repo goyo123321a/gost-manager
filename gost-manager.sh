@@ -7,9 +7,8 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 修复：使用更兼容的 IP 获取方式（避免 grep -P）
+# 获取本机 IP（兼容 BusyBox，不使用 -P）
 get_local_ip() {
-    # BusyBox 兼容的 IP 获取
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
     if [ -z "$ip" ]; then
         ip=$(hostname -i 2>/dev/null | awk '{print $1}')
@@ -20,7 +19,7 @@ get_local_ip() {
     echo "$ip"
 }
 
-# 自动检测并设置工作目录
+# 自动检测并设置工作目录（root / 普通用户均可）
 setup_workspace() {
     CURRENT_USER=$(whoami)
     
@@ -45,7 +44,6 @@ setup_workspace() {
     
     GOST_DIR="$WORK_HOME/GOST"
     
-    # 关键修复：确保目录存在
     if [[ ! -d "$GOST_DIR" ]]; then
         echo -e "${YELLOW}创建目录: ${GOST_DIR}${NC}"
         mkdir -p "$GOST_DIR" 2>/dev/null || {
@@ -62,7 +60,6 @@ setup_workspace() {
     echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
 }
 
-# 初始化工作空间
 setup_workspace
 
 # 检测系统架构
@@ -83,16 +80,13 @@ detect_os_arch() {
         i686|i386) cpu_arch="386" ;;
         *) cpu_arch="amd64" ;;
     esac
-    echo "$os $cpu_arch" > /dev/null
 }
 
-# 安装 GOST v2
+# 安装 GOST v2（修复下载地址）
 install_gost_v2() {
     local version=$1
     
-    # 确保目录存在
     mkdir -p "$GOST_DIR"
-    
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     
     cd "$GOST_DIR" || { 
@@ -100,41 +94,49 @@ install_gost_v2() {
         return 1
     }
     
-    # 清理旧文件
     rm -f gost gost.gz
     
-    local download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
+    # v2 官方可能的文件名列表
+    local download_urls=(
+        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
+        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-amd64-${version}.gz"
+        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
+        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
+    )
     
-    # 修正 arm64 下载地址
+    # 针对 arm64 再补充一个常见命名
     if [[ "$cpu_arch" == "arm64" ]]; then
-        download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
+        download_urls=(
+            "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
+            "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
+            "${download_urls[@]}"
+        )
     fi
     
-    echo -e "      下载地址: ${download_url}"
+    local downloaded=0
+    for url in "${download_urls[@]}"; do
+        echo -e "      尝试: ${url}"
+        if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
+            if [ -f "gost.gz" ] && [ -s "gost.gz" ] && gunzip -t gost.gz 2>/dev/null; then
+                echo -e "${GREEN}      下载成功！${NC}"
+                gunzip -f gost.gz
+                downloaded=1
+                break
+            fi
+        fi
+    done
     
-    # 下载
-    wget -q -O gost.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.gz 2>/dev/null
-    
-    if [ ! -f "gost.gz" ] || [ ! -s "gost.gz" ]; then
-        echo -e "${RED}下载失败，尝试备用地址...${NC}"
-        # 备用：直接下载二进制
-        download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}"
-        wget -q -O gost "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost 2>/dev/null
+    if [ $downloaded -eq 0 ]; then
+        echo -e "${RED}下载失败，请手动安装${NC}"
+        return 1
     fi
     
-    # 解压（如果是 .gz 文件）
-    if [ -f "gost.gz" ] && [ -s "gost.gz" ]; then
-        gunzip -f gost.gz 2>/dev/null
-    fi
-    
-    chmod +x gost 2>/dev/null
-    
-    # 验证
+    chmod +x gost
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         echo -e "${GREEN}✓ GOST v2 ${version} 安装成功！${NC}"
         return 0
     else
-        echo -e "${RED}安装失败，请检查网络或手动下载${NC}"
+        echo -e "${RED}安装失败${NC}"
         return 1
     fi
 }
@@ -143,54 +145,34 @@ install_gost_v2() {
 install_gost_v3() {
     local version=$1
     
-    # 确保目录存在
     mkdir -p "$GOST_DIR"
-    
     echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
     
-    cd "$GOST_DIR" || {
-        echo -e "${RED}无法进入目录: $GOST_DIR${NC}"
-        return 1
-    }
-    
-    # 清理旧文件
+    cd "$GOST_DIR" || return 1
     rm -f gost gost.tar.gz
     
     local clean_version="${version#v}"
     local download_url="https://github.com/go-gost/gost/releases/download/${version}/gost_${clean_version}_${os}_${cpu_arch}.tar.gz"
     
     echo -e "      下载地址: ${download_url}"
-    
-    # 下载
-    wget -q -O gost.tar.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.tar.gz 2>/dev/null
-    
-    if [ ! -f "gost.tar.gz" ] || [ ! -s "gost.tar.gz" ]; then
-        echo -e "${RED}下载失败${NC}"
-        return 1
+    if wget -q --timeout=15 -O gost.tar.gz "$download_url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$download_url" -o gost.tar.gz 2>/dev/null; then
+        tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz
+        chmod +x gost
+        rm -f gost.tar.gz
+        if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
+            echo -e "${GREEN}✓ GOST v3 ${version} 安装成功！${NC}"
+            return 0
+        fi
     fi
     
-    # 解压
-    tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz 2>/dev/null
-    chmod +x gost 2>/dev/null
-    
-    # 清理
-    rm -f gost.tar.gz
-    
-    # 验证
-    if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
-        echo -e "${GREEN}✓ GOST v3 ${version} 安装成功！${NC}"
-        return 0
-    else
-        echo -e "${RED}安装失败${NC}"
-        return 1
-    fi
+    echo -e "${RED}安装失败${NC}"
+    return 1
 }
 
 # 获取 v2 版本列表
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
-    
     if [[ -z "$versions" ]]; then
         versions="2.11.5 2.11.4 2.11.3 2.11.2 2.11.1"
     fi
@@ -212,7 +194,6 @@ get_v2_versions() {
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
-    
     if [[ -z "$versions" ]]; then
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
     fi
@@ -235,7 +216,7 @@ select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
     echo -e "${BLUE}========================================${NC}"
-    echo -e "  ${GREEN}1${NC}) GOST v2 (稳定版，推荐)"
+    echo -e "  ${GREEN}1${NC}) GOST v2 (稳定版)"
     echo -e "  ${GREEN}2${NC}) GOST v3 (最新版)"
     echo -e "  ${GREEN}0${NC}) 返回主菜单"
     echo -e "${BLUE}========================================${NC}"
