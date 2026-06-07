@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# ============================================
+# GOST 一键管理脚本（支持 Linux / FreeBSD / macOS）
+# ============================================
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -7,75 +11,69 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 获取本机 IP（兼容 BusyBox）
+# 获取本机 IP（兼容各系统）
 get_local_ip() {
-    local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
-    if [ -z "$ip" ]; then
-        ip=$(hostname -i 2>/dev/null | awk '{print $1}')
+    if command -v ip >/dev/null 2>&1; then
+        ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2
+    elif command -v ifconfig >/dev/null 2>&1; then
+        ifconfig | grep -E 'inet (addr:)?([0-9]+\.){3}[0-9]+' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d: -f2
+    else
+        hostname -i 2>/dev/null | awk '{print $1}'
     fi
-    if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
-        ip="$(hostname)"
-    fi
-    echo "$ip"
 }
 
-# 自动检测并设置工作目录（root/普通用户）
+# 自动检测系统类型和架构
+detect_os_arch() {
+    local kernel=$(uname -s)
+    case "$kernel" in
+        Linux)     os="linux" ;;
+        FreeBSD)   os="freebsd" ;;
+        Darwin)    os="darwin" ;;
+        MINGW*|CYGWIN*|MSYS*) os="windows" ;;
+        *)         os="linux" ;;
+    esac
+
+    local arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64)      cpu_arch="amd64" ;;
+        aarch64|arm64)     cpu_arch="arm64" ;;
+        armv7l|armv7)      cpu_arch="armv7" ;;
+        i386|i686)         cpu_arch="386" ;;
+        *)                 cpu_arch="amd64" ;;
+    esac
+
+    # 特殊处理：FreeBSD 下 uname -m 可能输出 amd64 但我们需要保持 amd64
+    echo -e "${GREEN}检测到系统: ${os} (${kernel}), 架构: ${cpu_arch}${NC}" >&2
+}
+
+# 设置工作目录（自动适配普通用户/root）
 setup_workspace() {
-    CURRENT_USER=$(whoami)
+    local CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
         if [[ -n "$SUDO_USER" ]]; then
-            NORMAL_USER="$SUDO_USER"
+            WORK_HOME="/home/$SUDO_USER"
         elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
-            NORMAL_USER="$USER"
-        else
-            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null)
-        fi
-        if [[ -n "$NORMAL_USER" ]]; then
-            WORK_HOME="/home/$NORMAL_USER"
-            echo -e "${YELLOW}检测到 root 用户，使用: ${WORK_HOME}${NC}"
+            WORK_HOME="/home/$USER"
         else
             WORK_HOME="$PWD"
         fi
     else
         WORK_HOME="$HOME"
     fi
+
     GOST_DIR="$WORK_HOME/GOST"
-    if [[ ! -d "$GOST_DIR" ]]; then
-        mkdir -p "$GOST_DIR" 2>/dev/null || {
-            GOST_DIR="/tmp/GOST_${CURRENT_USER}"
-            mkdir -p "$GOST_DIR"
-            echo -e "${YELLOW}使用备用目录: ${GOST_DIR}${NC}"
-        }
-    fi
+    mkdir -p "$GOST_DIR" 2>/dev/null || {
+        GOST_DIR="/tmp/GOST_${CURRENT_USER}"
+        mkdir -p "$GOST_DIR"
+        echo -e "${YELLOW}使用备用目录: ${GOST_DIR}${NC}"
+    }
     GOST_BIN="$GOST_DIR/gost"
     GOST_LOG="$GOST_DIR/gost.log"
     GOST_PID_FILE="$GOST_DIR/gost.pid"
     echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
 }
-setup_workspace
 
-# 检测系统架构（修复：强制识别 arm64）
-detect_os_arch() {
-    if [[ "$(uname)" == "Linux" ]]; then
-        os="linux"
-    elif [[ "$(uname)" == "Darwin" ]]; then
-        os="darwin"
-    else
-        os="linux"
-    fi
-    arch=$(uname -m)
-    case $arch in
-        x86_64|amd64) cpu_arch="amd64" ;;
-        aarch64|arm64) cpu_arch="arm64" ;;
-        armv7l|armv7) cpu_arch="armv7" ;;
-        i686|i386) cpu_arch="386" ;;
-        *) cpu_arch="amd64" ;;
-    esac
-    # 调试输出（可选，安装时显示）
-    echo -e "${GREEN}检测到系统: ${os}, 架构: ${cpu_arch}${NC}" >&2
-}
-
-# 版本比较函数：是否 >= 2.12（新格式从此版本开始）
+# 版本比较：是否 >= 2.12（新格式）
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -85,39 +83,44 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 GOST v2（智能选择新旧格式）
+# 安装 GOST v2（智能选择新旧格式，支持多系统）
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
-    cd "$GOST_DIR" || { echo -e "${RED}无法进入目录${NC}"; return 1; }
+    cd "$GOST_DIR" || return 1
     rm -f gost gost.tar.gz gost.gz
-    
+
     local downloaded=0
-    
-    # 新格式（>= 2.12.0）
+
+    # 新格式（>=2.12.0）统一使用 .tar.gz
     if version_ge_2_12 "$version"; then
         local tar_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost_${version}_${os}_${cpu_arch}.tar.gz"
         echo -e "      尝试新格式: ${tar_url}"
         if wget -q --timeout=15 -O gost.tar.gz "$tar_url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$tar_url" -o gost.tar.gz 2>/dev/null; then
             if [ -f "gost.tar.gz" ] && [ -s "gost.tar.gz" ]; then
                 tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz 2>/dev/null
-                if [ -f "gost" ]; then
-                    downloaded=1
-                    echo -e "${GREEN}      下载成功（新格式 .tar.gz）${NC}"
-                fi
+                [ -f "gost" ] && downloaded=1 && echo -e "${GREEN}      下载成功（新格式 .tar.gz）${NC}"
             fi
         fi
     fi
-    
-    # 如果新格式失败或版本 < 2.12，尝试旧格式 .gz（v2.11.x 及以下）
+
+    # 旧格式 .gz（兼容 v2.11.x 及更早，以及某些系统特定命名）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
         )
-        # 针对 arm 的特殊命名
+        # FreeBSD 旧命名可能是 gost-freebsd-amd64-2.11.5.gz
+        if [[ "$os" == "freebsd" ]]; then
+            gz_urls=(
+                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
+                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
+                "${gz_urls[@]}"
+            )
+        fi
+        # ARM 特殊处理
         if [[ "$cpu_arch" =~ ^armv[5-8]$ ]] || [[ "$cpu_arch" == "arm64" ]]; then
             gz_urls+=(
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
@@ -136,12 +139,12 @@ install_gost_v2() {
             fi
         done
     fi
-    
+
     if [ $downloaded -eq 0 ]; then
         echo -e "${RED}所有下载方式均失败，请手动安装${NC}"
         return 1
     fi
-    
+
     chmod +x gost
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         echo -e "${GREEN}✓ GOST v2 ${version} 安装成功！${NC}"
@@ -153,7 +156,7 @@ install_gost_v2() {
     fi
 }
 
-# 安装 GOST v3
+# 安装 GOST v3（统一 .tar.gz 格式）
 install_gost_v3() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -408,10 +411,8 @@ update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
     echo -e "${BLUE}========================================${NC}"
-    
     local script_url="https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh"
     local temp_script="/tmp/gost-manager-update.sh"
-    
     echo -e "${YELLOW}正在从远程仓库下载最新脚本...${NC}"
     if wget -q --timeout=10 -O "$temp_script" "$script_url" 2>/dev/null || curl -fsSL --connect-timeout 10 "$script_url" -o "$temp_script" 2>/dev/null; then
         if [ -s "$temp_script" ]; then
@@ -451,7 +452,8 @@ show_menu() {
 
 # 主程序
 main() {
-    detect_os_arch  # 这里会输出架构信息
+    detect_os_arch
+    setup_workspace
     while true; do
         show_menu
         read choice
