@@ -211,37 +211,40 @@ get_v2_versions() {
     fi
 }
 
-# 获取 v3 版本列表（只显示正式版，使用 awk 可靠过滤）
+# 获取 v3 版本列表（过滤预发布版本，默认选择第一个稳定版）
 get_v3_versions() {
-    echo -e "${BLUE}获取 GOST v3 版本列表（仅正式版）...${NC}"
-    # 使用 awk 解析 JSON，提取 prerelease=false 的版本
-    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | awk '
-        BEGIN { RS=","; FS=":"; prerelease=0; tag="" }
-        /"tag_name"/ { gsub(/[{}"]/, "", $2); tag=$2; }
-        /"prerelease"/ { gsub(/[ ,]/, "", $2); if ($2 == "false") prerelease=1; else prerelease=0; }
-        prerelease && tag != "" { print tag; prerelease=0; tag=""; }
-    ' | head -10)
-    
-    if [[ -z "$versions" ]]; then
-        echo -e "${YELLOW}无法获取远程列表，使用本地列表（稳定版）${NC}"
-        versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
+    echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
+    local all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
+    local versions=""
+    if [[ -z "$all_versions" ]]; then
+        # 备用列表只包含稳定版
+        versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2 v3.2.1 v3.2.0"
+    else
+        # 过滤掉包含 nightly, rc, alpha, beta 的预发布版本
+        versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
     fi
+    
     local version_array=($versions)
     local version_count=${#version_array[@]}
+    
     if [ $version_count -eq 0 ]; then
-        echo -e "${RED}没有可用的稳定版本${NC}"
-        return 1
+        echo -e "${RED}未找到稳定版本，使用备用列表${NC}"
+        version_array=(v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2)
+        version_count=${#version_array[@]}
     fi
-    echo -e "${GREEN}可用的 GOST v3 正式版本:${NC}"
+    
+    echo -e "${GREEN}可用的 GOST v3 稳定版本:${NC}"
     for i in "${!version_array[@]}"; do
         echo "  $((i+1))) ${version_array[$i]}"
     done
     echo "  $((version_count+1))) 返回上级"
+    
     echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
     read choice
     if [[ -z "$choice" ]]; then
         choice=1
     fi
+    
     if [[ "$choice" -eq $((version_count+1)) ]]; then
         return 1
     elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
