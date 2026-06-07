@@ -395,7 +395,7 @@ configure_proxy() {
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
-    echo -e "  ${GREEN}4${NC}) 无加密自适应"
+    echo -e "  ${GREEN}4${NC}) 无加密自适应 (HTTP/SOCKS5/ProxyIP 自动识别)"
     echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
     read protocol
     [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
