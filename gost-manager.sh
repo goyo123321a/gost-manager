@@ -314,11 +314,6 @@ start_gost() {
             proxy_url="http://${username}:${password}@${ip}:${port} / socks5://${username}:${password}@${ip}:${port}"
             echo -e "${GREEN}启动自适应代理...${NC}"
             ;;
-        4)
-            cmd="$GOST_BIN -L :${port}"
-            proxy_url="${ip}:${port} (无加密)"
-            echo -e "${GREEN}启动无加密代理...${NC}"
-            ;;
     esac
     nohup $cmd > "$GOST_LOG" 2>&1 &
     local pid=$!
@@ -395,21 +390,18 @@ configure_proxy() {
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
-    echo -e "  ${GREEN}4${NC}) 无加密自适应 (HTTP/SOCKS5/ProxyIP 自动识别)"
-    echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
+    echo -n -e "${YELLOW}请输入 [1-3]: ${NC}"
     read protocol
-    [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
+    [[ ! "$protocol" =~ ^[1-3]$ ]] && protocol=3
     local username="admin"
     local password="123456"
-    if [ "$protocol" -ne 4 ]; then
-        echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
-        echo -n -e "${YELLOW}账号 [admin]: ${NC}"
-        read input_user
-        [ -n "$input_user" ] && username="$input_user"
-        echo -n -e "${YELLOW}密码 [123456]: ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
-    fi
+    echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
+    echo -n -e "${YELLOW}账号 [admin]: ${NC}"
+    read input_user
+    [ -n "$input_user" ] && username="$input_user"
+    echo -n -e "${YELLOW}密码 [123456]: ${NC}"
+    read input_pass
+    [ -n "$input_pass" ] && password="$input_pass"
     start_gost "$protocol" "$port" "$username" "$password"
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
@@ -497,7 +489,6 @@ main() {
             1) if select_version_to_install; then
                    if [ -f "$GOST_BIN" ]; then
                        echo
-                       # 修改点：默认配置代理 (Y/n)
                        echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
                        read config_now
                        if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
