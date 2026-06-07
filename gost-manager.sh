@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ============================================
-# GOST 一键管理脚本（支持 Linux / FreeBSD / macOS）
+# GOST 一键管理脚本（支持 Linux/FreeBSD/macOS/Alpine）
 # ============================================
 
 # 颜色定义
@@ -11,7 +11,10 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 获取本机 IP（兼容各系统）
+# 全局变量
+is_alpine=0
+
+# ==================== 系统检测 ====================
 get_local_ip() {
     if command -v ip >/dev/null 2>&1; then
         ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2
@@ -22,7 +25,6 @@ get_local_ip() {
     fi
 }
 
-# 自动检测系统类型和架构
 detect_os_arch() {
     local kernel=$(uname -s)
     case "$kernel" in
@@ -33,6 +35,12 @@ detect_os_arch() {
         *)         os="linux" ;;
     esac
 
+    # 检测 Alpine Linux (musl libc)
+    if [ -f /etc/alpine-release ]; then
+        is_alpine=1
+        echo -e "${YELLOW}检测到 Alpine Linux (musl libc)，将使用旧格式兼容二进制${NC}" >&2
+    fi
+
     local arch=$(uname -m)
     case "$arch" in
         x86_64|amd64)      cpu_arch="amd64" ;;
@@ -42,11 +50,9 @@ detect_os_arch() {
         *)                 cpu_arch="amd64" ;;
     esac
 
-    # 特殊处理：FreeBSD 下 uname -m 可能输出 amd64 但我们需要保持 amd64
     echo -e "${GREEN}检测到系统: ${os} (${kernel}), 架构: ${cpu_arch}${NC}" >&2
 }
 
-# 设置工作目录（自动适配普通用户/root）
 setup_workspace() {
     local CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -73,8 +79,12 @@ setup_workspace() {
     echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
 }
 
-# 版本比较：是否 >= 2.12（新格式）
+# ==================== 版本比较（Alpine 强制使用旧格式） ====================
 version_ge_2_12() {
+    # Alpine 系统不尝试新格式（新格式多为 glibc 动态链接，不兼容 musl）
+    if [ "$is_alpine" -eq 1 ]; then
+        return 1
+    fi
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
     local minor=$(echo "$v" | cut -d. -f2)
@@ -83,7 +93,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 GOST v2（智能选择新旧格式，支持多系统）
+# ==================== 安装 v2（智能新旧格式） ====================
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -93,7 +103,7 @@ install_gost_v2() {
 
     local downloaded=0
 
-    # 新格式（>=2.12.0）统一使用 .tar.gz
+    # 尝试新格式（仅当版本 >=2.12 且不是 Alpine）
     if version_ge_2_12 "$version"; then
         local tar_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost_${version}_${os}_${cpu_arch}.tar.gz"
         echo -e "      尝试新格式: ${tar_url}"
@@ -105,17 +115,16 @@ install_gost_v2() {
         fi
     fi
 
-    # 旧格式 .gz（兼容 v2.11.x 及更早，以及某些系统特定命名）
+    # 旧格式 .gz（兼容 v2.11.x 及以下，以及 Alpine 强制使用）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
         )
-        # FreeBSD 旧命名可能是 gost-freebsd-amd64-2.11.5.gz
+        # FreeBSD 特殊命名
         if [[ "$os" == "freebsd" ]]; then
             gz_urls=(
-                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
                 "${gz_urls[@]}"
             )
@@ -156,7 +165,7 @@ install_gost_v2() {
     fi
 }
 
-# 安装 GOST v3（统一 .tar.gz 格式）
+# ==================== 安装 v3（统一 tar.gz） ====================
 install_gost_v3() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -179,7 +188,7 @@ install_gost_v3() {
     return 1
 }
 
-# 获取 v2 版本列表
+# ==================== 版本列表获取 ====================
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
@@ -200,7 +209,6 @@ get_v2_versions() {
     done
 }
 
-# 获取 v3 版本列表
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
@@ -220,7 +228,6 @@ get_v3_versions() {
     done
 }
 
-# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
@@ -239,7 +246,7 @@ select_version_to_install() {
     esac
 }
 
-# 停止 GOST
+# ==================== 代理管理 ====================
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
         echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
@@ -250,7 +257,6 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
-# 启动代理
 start_gost() {
     local protocol=$1
     local port=$2
@@ -300,7 +306,6 @@ start_gost() {
     fi
 }
 
-# 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -327,7 +332,6 @@ EOF
     echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
-# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}正在卸载 GOST...${NC}"
     stop_gost
@@ -336,7 +340,6 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置代理流程
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
         echo -e "${RED}请先安装 GOST${NC}"
@@ -383,7 +386,6 @@ configure_proxy() {
     read -n 1
 }
 
-# 显示状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
@@ -406,7 +408,6 @@ show_status() {
     read -n 1
 }
 
-# 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -434,7 +435,6 @@ update_script() {
     read -n 1
 }
 
-# 主菜单
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -450,7 +450,7 @@ show_menu() {
     echo -n -e "${YELLOW}请输入 [0-5]: ${NC}"
 }
 
-# 主程序
+# ==================== 主程序 ====================
 main() {
     detect_os_arch
     setup_workspace
