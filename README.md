@@ -23,9 +23,9 @@
 ### 一键安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh && bash ~/gost-manager.sh
+curl -fsSL https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh && bash ~/gost-manager.sh```
 
-使用流程
+## 使用流程
 
 1. 运行脚本后，会显示主菜单。
 2. 选择 1) 安装 GOST → 选择版本（v2 / v3）→ 选择具体版本号（直接回车默认安装第一个版本）。
