@@ -7,43 +7,48 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 自动检测并设置工作目录（关键修复）
+# 修复：使用更兼容的 IP 获取方式（避免 grep -P）
+get_local_ip() {
+    # BusyBox 兼容的 IP 获取
+    local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
+    if [ -z "$ip" ]; then
+        ip=$(hostname -i 2>/dev/null | awk '{print $1}')
+    fi
+    if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
+        ip="$(hostname)"
+    fi
+    echo "$ip"
+}
+
+# 自动检测并设置工作目录
 setup_workspace() {
-    # 检测当前用户
     CURRENT_USER=$(whoami)
     
-    # 如果是 root 用户，使用普通用户的家目录（避免 /root）
     if [[ "$CURRENT_USER" == "root" ]]; then
-        # 尝试获取普通用户（通过环境变量或 passwd）
         if [[ -n "$SUDO_USER" ]]; then
             NORMAL_USER="$SUDO_USER"
         elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
             NORMAL_USER="$USER"
         else
-            # 查找第一个 UID >= 1000 的用户
-            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd)
+            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null)
         fi
         
         if [[ -n "$NORMAL_USER" ]]; then
             WORK_HOME="/home/$NORMAL_USER"
-            echo -e "${YELLOW}检测到 root 用户，将使用普通用户 ${NORMAL_USER} 的家目录: ${WORK_HOME}${NC}"
+            echo -e "${YELLOW}检测到 root 用户，使用: ${WORK_HOME}${NC}"
         else
-            # 没有普通用户，使用当前目录
             WORK_HOME="$PWD"
-            echo -e "${YELLOW}未检测到普通用户，使用当前目录: ${WORK_HOME}${NC}"
         fi
     else
-        # 普通用户直接使用家目录
         WORK_HOME="$HOME"
     fi
     
-    # 设置 GOST 目录
     GOST_DIR="$WORK_HOME/GOST"
     
-    # 确保目录存在且有权限
+    # 关键修复：确保目录存在
     if [[ ! -d "$GOST_DIR" ]]; then
+        echo -e "${YELLOW}创建目录: ${GOST_DIR}${NC}"
         mkdir -p "$GOST_DIR" 2>/dev/null || {
-            # 如果创建失败，使用临时目录
             GOST_DIR="/tmp/GOST_${CURRENT_USER}"
             mkdir -p "$GOST_DIR"
             echo -e "${YELLOW}使用备用目录: ${GOST_DIR}${NC}"
@@ -57,16 +62,8 @@ setup_workspace() {
     echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
 }
 
-# 调用工作空间设置
+# 初始化工作空间
 setup_workspace
-
-# 获取本机IP
-get_local_ip() {
-    local ip=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127\.' | head -n 1)
-    [ -z "$ip" ] && ip=$(hostname -i 2>/dev/null | awk '{print $1}')
-    [ -z "$ip" ] && ip="$(hostname)"
-    echo "$ip"
-}
 
 # 检测系统架构
 detect_os_arch() {
@@ -86,18 +83,25 @@ detect_os_arch() {
         i686|i386) cpu_arch="386" ;;
         *) cpu_arch="amd64" ;;
     esac
-    echo "$os $cpu_arch"
+    echo "$os $cpu_arch" > /dev/null
 }
 
 # 安装 GOST v2
 install_gost_v2() {
     local version=$1
+    
+    # 确保目录存在
+    mkdir -p "$GOST_DIR"
+    
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     
     cd "$GOST_DIR" || { 
         echo -e "${RED}无法进入目录: $GOST_DIR${NC}"
         return 1
     }
+    
+    # 清理旧文件
+    rm -f gost gost.gz
     
     local download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
     
@@ -109,23 +113,28 @@ install_gost_v2() {
     echo -e "      下载地址: ${download_url}"
     
     # 下载
-    wget -O gost.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.gz
+    wget -q -O gost.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.gz 2>/dev/null
     
-    if [ ! -f "gost.gz" ]; then
-        echo -e "${RED}下载失败${NC}"
-        return 1
+    if [ ! -f "gost.gz" ] || [ ! -s "gost.gz" ]; then
+        echo -e "${RED}下载失败，尝试备用地址...${NC}"
+        # 备用：直接下载二进制
+        download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}"
+        wget -q -O gost "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost 2>/dev/null
     fi
     
-    # 解压
-    gunzip -f gost.gz
-    chmod +x gost
+    # 解压（如果是 .gz 文件）
+    if [ -f "gost.gz" ] && [ -s "gost.gz" ]; then
+        gunzip -f gost.gz 2>/dev/null
+    fi
+    
+    chmod +x gost 2>/dev/null
     
     # 验证
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         echo -e "${GREEN}✓ GOST v2 ${version} 安装成功！${NC}"
         return 0
     else
-        echo -e "${RED}安装失败${NC}"
+        echo -e "${RED}安装失败，请检查网络或手动下载${NC}"
         return 1
     fi
 }
@@ -133,6 +142,10 @@ install_gost_v2() {
 # 安装 GOST v3
 install_gost_v3() {
     local version=$1
+    
+    # 确保目录存在
+    mkdir -p "$GOST_DIR"
+    
     echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
     
     cd "$GOST_DIR" || {
@@ -140,23 +153,25 @@ install_gost_v3() {
         return 1
     }
     
-    # 处理版本号格式
+    # 清理旧文件
+    rm -f gost gost.tar.gz
+    
     local clean_version="${version#v}"
     local download_url="https://github.com/go-gost/gost/releases/download/${version}/gost_${clean_version}_${os}_${cpu_arch}.tar.gz"
     
     echo -e "      下载地址: ${download_url}"
     
     # 下载
-    wget -O gost.tar.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.tar.gz
+    wget -q -O gost.tar.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.tar.gz 2>/dev/null
     
-    if [ ! -f "gost.tar.gz" ]; then
+    if [ ! -f "gost.tar.gz" ] || [ ! -s "gost.tar.gz" ]; then
         echo -e "${RED}下载失败${NC}"
         return 1
     fi
     
     # 解压
-    tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz
-    chmod +x gost
+    tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz 2>/dev/null
+    chmod +x gost 2>/dev/null
     
     # 清理
     rm -f gost.tar.gz
@@ -437,7 +452,7 @@ show_menu() {
 
 # 主程序
 main() {
-    detect_os_arch > /dev/null
+    detect_os_arch
     
     while true; do
         show_menu
