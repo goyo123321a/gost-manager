@@ -211,16 +211,22 @@ get_v2_versions() {
     fi
 }
 
-# 获取 v3 版本列表（默认选择第一个）
+# 获取 v3 版本列表（只显示正式版，过滤 nightly 等预发布版本）
 get_v3_versions() {
-    echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
-    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
+    echo -e "${BLUE}获取 GOST v3 版本列表（仅正式版）...${NC}"
+    # 使用 API 过滤 prerelease = false 的版本
+    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep -E '"tag_name":|"prerelease":' | paste - - | grep '"prerelease": false' | grep -oE '"tag_name": "v[^"]+"' | cut -d'"' -f4 | head -10)
     if [[ -z "$versions" ]]; then
+        echo -e "${YELLOW}无法获取远程列表，使用本地列表（稳定版）${NC}"
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
     fi
     local version_array=($versions)
     local version_count=${#version_array[@]}
-    echo -e "${GREEN}可用的 GOST v3 版本:${NC}"
+    if [ $version_count -eq 0 ]; then
+        echo -e "${RED}没有可用的稳定版本${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}可用的 GOST v3 正式版本:${NC}"
     for i in "${!version_array[@]}"; do
         echo "  $((i+1))) ${version_array[$i]}"
     done
@@ -380,7 +386,7 @@ configure_proxy() {
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
-    echo -e "  ${GREEN}4${NC}) 无加密自适应 (HTTP/SOCKS5/ProxyIP 自动识别)"
+    echo -e "  ${GREEN}4${NC}) 无加密自适应"
     echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
     read protocol
     [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
