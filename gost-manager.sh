@@ -77,7 +77,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 v2（完全兼容旧版本的各种命名）
+# 安装 v2（兼容新旧格式）
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -97,18 +97,13 @@ install_gost_v2() {
         fi
     fi
 
-    # 旧格式 .gz：根据官方文件列表生成多种可能的 URL
+    # 旧格式 .gz（多种备选URL）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
-        local gz_urls=()
-
-        # 通用模式
-        gz_urls+=(
+        local gz_urls=(
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
         )
-
-        # 针对 Linux 各架构的特殊命名（armv5/6/7/8, mips, riscv64, s390x 等）
         if [[ "$os" == "linux" ]]; then
             case "$cpu_arch" in
                 amd64)
@@ -123,29 +118,15 @@ install_gost_v2() {
                 armv7)
                     gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv7-${version}.gz")
                     ;;
-                armv5|armv6|armv7)
-                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz")
-                    ;;
                 386)
                     gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-386-${version}.gz")
                     ;;
             esac
-        fi
-
-        # 针对 FreeBSD 的特殊命名
-        if [[ "$os" == "freebsd" ]]; then
-            gz_urls+=(
-                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
-                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz"
-            )
-        fi
-
-        # 针对 macOS (Darwin)
-        if [[ "$os" == "darwin" ]]; then
+        elif [[ "$os" == "freebsd" ]]; then
+            gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz")
+        elif [[ "$os" == "darwin" ]]; then
             gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-darwin-${cpu_arch}-${version}.gz")
         fi
-
-        # 去重并尝试下载
         for url in "${gz_urls[@]}"; do
             echo -e "      尝试: ${url}"
             if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
@@ -198,44 +179,67 @@ install_gost_v3() {
     return 1
 }
 
-# 获取 v2 版本列表
+# 获取 v2 版本列表（默认选择第一个）
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
     if [[ -z "$versions" ]]; then
+        echo -e "${YELLOW}无法获取远程列表，使用本地列表${NC}"
         versions="2.12.0 2.11.5 2.11.4 2.11.3 2.11.2 2.11.1 2.11.0 2.10.0 2.9.2"
     fi
+    local version_array=($versions)
+    local version_count=${#version_array[@]}
     echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
-    select version in $versions "返回上级"; do
-        if [[ "$version" == "返回上级" ]]; then
-            return 1
-        elif [[ -n "$version" ]]; then
-            install_gost_v2 "$version"
-            return $?
-        else
-            echo -e "${RED}无效选择${NC}"
-        fi
+    for i in "${!version_array[@]}"; do
+        echo "  $((i+1))) ${version_array[$i]}"
     done
+    echo "  $((version_count+1))) 返回上级"
+    echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
+    read choice
+    if [[ -z "$choice" ]]; then
+        choice=1
+    fi
+    if [[ "$choice" -eq $((version_count+1)) ]]; then
+        return 1
+    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
+        local selected_version="${version_array[$((choice-1))]}"
+        install_gost_v2 "$selected_version"
+        return $?
+    else
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
 }
 
-# 获取 v3 版本列表
+# 获取 v3 版本列表（默认选择第一个）
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
     if [[ -z "$versions" ]]; then
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
     fi
+    local version_array=($versions)
+    local version_count=${#version_array[@]}
     echo -e "${GREEN}可用的 GOST v3 版本:${NC}"
-    select version in $versions "返回上级"; do
-        if [[ "$version" == "返回上级" ]]; then
-            return 1
-        elif [[ -n "$version" ]]; then
-            install_gost_v3 "$version"
-            return $?
-        else
-            echo -e "${RED}无效选择${NC}"
-        fi
+    for i in "${!version_array[@]}"; do
+        echo "  $((i+1))) ${version_array[$i]}"
     done
+    echo "  $((version_count+1))) 返回上级"
+    echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
+    read choice
+    if [[ -z "$choice" ]]; then
+        choice=1
+    fi
+    if [[ "$choice" -eq $((version_count+1)) ]]; then
+        return 1
+    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
+        local selected_version="${version_array[$((choice-1))]}"
+        install_gost_v3 "$selected_version"
+        return $?
+    else
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
 }
 
 # 选择版本
@@ -376,7 +380,7 @@ configure_proxy() {
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
-    echo -e "  ${GREEN}4${NC}) 无加密自适应"
+    echo -e "  ${GREEN}4${NC}) 无加密自适应 (HTTP/SOCKS5/ProxyIP 自动识别)"
     echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
     read protocol
     [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
