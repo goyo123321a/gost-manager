@@ -73,14 +73,14 @@ detect_os_arch() {
     esac
 }
 
-# 版本比较函数（是否 >= 2.11）
-version_ge_2_11() {
+# 版本比较函数：是否 >= 2.12（新格式从此版本开始）
+version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
     local minor=$(echo "$v" | cut -d. -f2)
     if [ "$major" -gt 2 ]; then return 0; fi
     if [ "$major" -lt 2 ]; then return 1; fi
-    [ "$minor" -ge 11 ]
+    [ "$minor" -ge 12 ]
 }
 
 # 安装 GOST v2（智能选择新旧格式）
@@ -93,8 +93,8 @@ install_gost_v2() {
     
     local downloaded=0
     
-    # 新格式（>= 2.11.0）
-    if version_ge_2_11 "$version"; then
+    # 新格式（>= 2.12.0）
+    if version_ge_2_12 "$version"; then
         local tar_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost_${version}_${os}_${cpu_arch}.tar.gz"
         echo -e "      尝试新格式: ${tar_url}"
         if wget -q --timeout=15 -O gost.tar.gz "$tar_url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$tar_url" -o gost.tar.gz 2>/dev/null; then
@@ -108,20 +108,22 @@ install_gost_v2() {
         fi
     fi
     
-    # 如果新格式失败或版本 < 2.11，尝试旧格式 .gz
+    # 如果新格式失败或版本 < 2.12，尝试旧格式 .gz（v2.11.x 及以下）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
+        # 根据用户提供的列表构造 URL
         local gz_urls=(
-            "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
+            "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
         )
-        if [[ "$cpu_arch" == "arm64" ]]; then
-            gz_urls=(
+        # 针对 arm 的特殊命名（armv5/6/7/8）
+        if [[ "$cpu_arch" =~ ^armv[5-8]$ ]] || [[ "$cpu_arch" == "arm64" ]]; then
+            gz_urls+=(
+                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
                 "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
-                "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
-                "${gz_urls[@]}"
             )
         fi
+        # 去重（简单处理，不影响功能）
         for url in "${gz_urls[@]}"; do
             echo -e "      尝试: ${url}"
             if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
@@ -401,6 +403,36 @@ show_status() {
     read -n 1
 }
 
+# 更新脚本
+update_script() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}          更新脚本${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    
+    local script_url="https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh"
+    local temp_script="/tmp/gost-manager-update.sh"
+    
+    echo -e "${YELLOW}正在从远程仓库下载最新脚本...${NC}"
+    if wget -q --timeout=10 -O "$temp_script" "$script_url" 2>/dev/null || curl -fsSL --connect-timeout 10 "$script_url" -o "$temp_script" 2>/dev/null; then
+        if [ -s "$temp_script" ]; then
+            cp "$temp_script" "$0"
+            chmod +x "$0"
+            rm -f "$temp_script"
+            echo -e "${GREEN}✓ 脚本更新成功！${NC}"
+            echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
+            echo -n -e "${GREEN}按任意键退出...${NC}"
+            read -n 1
+            exit 0
+        else
+            echo -e "${RED}下载的文件为空，更新失败${NC}"
+        fi
+    else
+        echo -e "${RED}下载失败，请检查网络连接${NC}"
+    fi
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
+}
+
 # 主菜单
 show_menu() {
     echo
@@ -411,9 +443,10 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}2${BLUE}) 配置代理                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}3${BLUE}) 查看状态                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo -n -e "${YELLOW}请输入 [0-4]: ${NC}"
+    echo -n -e "${YELLOW}请输入 [0-5]: ${NC}"
 }
 
 # 主程序
@@ -436,6 +469,7 @@ main() {
             2) configure_proxy ;;
             3) show_status ;;
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
+            5) update_script ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
         esac
