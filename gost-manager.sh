@@ -497,9 +497,10 @@ main() {
             1) if select_version_to_install; then
                    if [ -f "$GOST_BIN" ]; then
                        echo
-                       echo -n -e "${GREEN}是否配置代理？[y/N]: ${NC}"
+                       # 修改点：默认配置代理 (Y/n)
+                       echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
                        read config_now
-                       if [[ "$config_now" =~ ^[Yy]$ ]]; then
+                       if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
                            configure_proxy
                        fi
                    fi
