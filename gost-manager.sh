@@ -7,15 +7,62 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 全局变量
-GOST_DIR="$HOME/GOST"
-GOST_BIN="$GOST_DIR/gost"
-GOST_LOG="$GOST_DIR/gost.log"
-GOST_PID_FILE="$GOST_DIR/gost.pid"
+# 自动检测并设置工作目录（关键修复）
+setup_workspace() {
+    # 检测当前用户
+    CURRENT_USER=$(whoami)
+    
+    # 如果是 root 用户，使用普通用户的家目录（避免 /root）
+    if [[ "$CURRENT_USER" == "root" ]]; then
+        # 尝试获取普通用户（通过环境变量或 passwd）
+        if [[ -n "$SUDO_USER" ]]; then
+            NORMAL_USER="$SUDO_USER"
+        elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
+            NORMAL_USER="$USER"
+        else
+            # 查找第一个 UID >= 1000 的用户
+            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd)
+        fi
+        
+        if [[ -n "$NORMAL_USER" ]]; then
+            WORK_HOME="/home/$NORMAL_USER"
+            echo -e "${YELLOW}检测到 root 用户，将使用普通用户 ${NORMAL_USER} 的家目录: ${WORK_HOME}${NC}"
+        else
+            # 没有普通用户，使用当前目录
+            WORK_HOME="$PWD"
+            echo -e "${YELLOW}未检测到普通用户，使用当前目录: ${WORK_HOME}${NC}"
+        fi
+    else
+        # 普通用户直接使用家目录
+        WORK_HOME="$HOME"
+    fi
+    
+    # 设置 GOST 目录
+    GOST_DIR="$WORK_HOME/GOST"
+    
+    # 确保目录存在且有权限
+    if [[ ! -d "$GOST_DIR" ]]; then
+        mkdir -p "$GOST_DIR" 2>/dev/null || {
+            # 如果创建失败，使用临时目录
+            GOST_DIR="/tmp/GOST_${CURRENT_USER}"
+            mkdir -p "$GOST_DIR"
+            echo -e "${YELLOW}使用备用目录: ${GOST_DIR}${NC}"
+        }
+    fi
+    
+    GOST_BIN="$GOST_DIR/gost"
+    GOST_LOG="$GOST_DIR/gost.log"
+    GOST_PID_FILE="$GOST_DIR/gost.pid"
+    
+    echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
+}
+
+# 调用工作空间设置
+setup_workspace
 
 # 获取本机IP
 get_local_ip() {
-    local ip=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127\.' | head -n 1)
+    local ip=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127\.' | head -n 1)
     [ -z "$ip" ] && ip=$(hostname -i 2>/dev/null | awk '{print $1}')
     [ -z "$ip" ] && ip="$(hostname)"
     echo "$ip"
@@ -47,18 +94,21 @@ install_gost_v2() {
     local version=$1
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     
-    cd "$GOST_DIR" || return 1
+    cd "$GOST_DIR" || { 
+        echo -e "${RED}无法进入目录: $GOST_DIR${NC}"
+        return 1
+    }
     
     local download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
     
-    # 备用下载地址
+    # 修正 arm64 下载地址
     if [[ "$cpu_arch" == "arm64" ]]; then
         download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
     fi
     
     echo -e "      下载地址: ${download_url}"
     
-    # 下载并解压
+    # 下载
     wget -O gost.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.gz
     
     if [ ! -f "gost.gz" ]; then
@@ -66,6 +116,7 @@ install_gost_v2() {
         return 1
     fi
     
+    # 解压
     gunzip -f gost.gz
     chmod +x gost
     
@@ -84,13 +135,18 @@ install_gost_v3() {
     local version=$1
     echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
     
-    cd "$GOST_DIR" || return 1
+    cd "$GOST_DIR" || {
+        echo -e "${RED}无法进入目录: $GOST_DIR${NC}"
+        return 1
+    }
     
-    local download_url="https://github.com/go-gost/gost/releases/download/${version}/gost_${version#v}_${os}_${cpu_arch}.tar.gz"
+    # 处理版本号格式
+    local clean_version="${version#v}"
+    local download_url="https://github.com/go-gost/gost/releases/download/${version}/gost_${clean_version}_${os}_${cpu_arch}.tar.gz"
     
     echo -e "      下载地址: ${download_url}"
     
-    # 下载并解压
+    # 下载
     wget -O gost.tar.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.tar.gz
     
     if [ ! -f "gost.tar.gz" ]; then
@@ -98,6 +154,7 @@ install_gost_v3() {
         return 1
     fi
     
+    # 解压
     tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz
     chmod +x gost
     
@@ -117,10 +174,9 @@ install_gost_v3() {
 # 获取 v2 版本列表
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
-    local versions=$(curl -s "https://api.github.com/repos/ginuerzh/gost/releases" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
+    local versions=$(curl -s "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
     
     if [[ -z "$versions" ]]; then
-        # 手动列出常用版本
         versions="2.11.5 2.11.4 2.11.3 2.11.2 2.11.1"
     fi
     
@@ -140,7 +196,7 @@ get_v2_versions() {
 # 获取 v3 版本列表
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
-    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
+    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
     
     if [[ -z "$versions" ]]; then
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
@@ -159,12 +215,12 @@ get_v3_versions() {
     done
 }
 
-# 选择安装版本
+# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
     echo -e "${BLUE}========================================${NC}"
-    echo -e "  ${GREEN}1${NC}) GOST v2 (稳定版，推荐 Serv00)"
+    echo -e "  ${GREEN}1${NC}) GOST v2 (稳定版，推荐)"
     echo -e "  ${GREEN}2${NC}) GOST v3 (最新版)"
     echo -e "  ${GREEN}0${NC}) 返回主菜单"
     echo -e "${BLUE}========================================${NC}"
@@ -190,7 +246,7 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
-# 启动 GOST 代理
+# 启动代理
 start_gost() {
     local protocol=$1
     local port=$2
@@ -218,7 +274,7 @@ start_gost() {
         3)
             cmd="$GOST_BIN -L ${username}:${password}@:${port}"
             proxy_url="http://${username}:${password}@${ip}:${port} / socks5://${username}:${password}@${ip}:${port}"
-            echo -e "${GREEN}启动自适应代理 (HTTP + SOCKS5)...${NC}"
+            echo -e "${GREEN}启动自适应代理...${NC}"
             ;;
         4)
             cmd="$GOST_BIN -L :${port}"
@@ -246,22 +302,22 @@ start_gost() {
     fi
 }
 
-# 配置开机自启
+# 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     
-    cat > "$GOST_DIR/keepalive.sh" << 'EOF'
+    cat > "$GOST_DIR/keepalive.sh" << EOF
 #!/usr/bin/env bash
-GOST_DIR="$HOME/GOST"
-cd "$GOST_DIR"
-if [ -f "gost.pid" ] && kill -0 "$(cat gost.pid)" 2>/dev/null; then
+GOST_DIR="$GOST_DIR"
+cd "\$GOST_DIR"
+if [ -f "gost.pid" ] && kill -0 "\$(cat gost.pid)" 2>/dev/null; then
     exit 0
 fi
-if ! pgrep -f "$GOST_DIR/gost" > /dev/null; then
+if ! pgrep -f "\$GOST_DIR/gost" > /dev/null; then
     if [ -f "start_cmd.txt" ]; then
-        cmd=$(cat start_cmd.txt)
-        nohup $cmd > gost.log 2>&1 &
-        echo $! > gost.pid
+        cmd=\$(cat start_cmd.txt)
+        nohup \$cmd > gost.log 2>&1 &
+        echo \$! > gost.pid
     fi
 fi
 EOF
@@ -274,10 +330,10 @@ EOF
     
     (echo "$current_cron"; echo "@reboot $GOST_DIR/keepalive.sh"; echo "*/5 * * * * $GOST_DIR/keepalive.sh") | crontab -
     
-    echo -e "${GREEN}✓ 已配置开机自启和进程保活（每5分钟检查）${NC}"
+    echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
-# 卸载 GOST
+# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}正在卸载 GOST...${NC}"
     stop_gost
@@ -348,6 +404,7 @@ show_status() {
         local version_info=$("$GOST_BIN" -V 2>&1 | head -1)
         echo -e "${GREEN}GOST 状态: 已安装${NC}"
         echo -e "${GREEN}版本信息: ${version_info}${NC}"
+        echo -e "${GREEN}安装路径: ${GOST_BIN}${NC}"
         if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
             echo -e "${GREEN}代理状态: 运行中 ✓${NC}"
             local pid=$(pgrep -f "$GOST_BIN" | head -1)
