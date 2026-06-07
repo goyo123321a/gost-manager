@@ -211,11 +211,17 @@ get_v2_versions() {
     fi
 }
 
-# 获取 v3 版本列表（只显示正式版，过滤 nightly 等预发布版本）
+# 获取 v3 版本列表（只显示正式版，使用 awk 可靠过滤）
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表（仅正式版）...${NC}"
-    # 使用 API 过滤 prerelease = false 的版本
-    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep -E '"tag_name":|"prerelease":' | paste - - | grep '"prerelease": false' | grep -oE '"tag_name": "v[^"]+"' | cut -d'"' -f4 | head -10)
+    # 使用 awk 解析 JSON，提取 prerelease=false 的版本
+    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | awk '
+        BEGIN { RS=","; FS=":"; prerelease=0; tag="" }
+        /"tag_name"/ { gsub(/[{}"]/, "", $2); tag=$2; }
+        /"prerelease"/ { gsub(/[ ,]/, "", $2); if ($2 == "false") prerelease=1; else prerelease=0; }
+        prerelease && tag != "" { print tag; prerelease=0; tag=""; }
+    ' | head -10)
+    
     if [[ -z "$versions" ]]; then
         echo -e "${YELLOW}无法获取远程列表，使用本地列表（稳定版）${NC}"
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
