@@ -12,8 +12,6 @@ GOST_DIR="$HOME/GOST"
 GOST_BIN="$GOST_DIR/gost"
 GOST_LOG="$GOST_DIR/gost.log"
 GOST_PID_FILE="$GOST_DIR/gost.pid"
-repo="go-gost/gost"
-base_url="https://api.github.com/repos/$repo/releases"
 
 # 获取本机IP
 get_local_ip() {
@@ -23,137 +21,170 @@ get_local_ip() {
     echo "$ip"
 }
 
-# 检测系统架构（优化版）
+# 检测系统架构
 detect_os_arch() {
-    # 检测操作系统
     if [[ "$(uname)" == "Linux" ]]; then
         os="linux"
     elif [[ "$(uname)" == "Darwin" ]]; then
         os="darwin"
-    elif [[ "$(uname)" == "MINGW"* ]] || [[ "$(uname)" == "CYGWIN"* ]]; then
-        os="windows"
     else
-        echo -e "${RED}Unsupported operating system.${NC}"
-        exit 1
+        os="linux"
     fi
 
-    # 检测CPU架构
     arch=$(uname -m)
     case $arch in
         x86_64|amd64) cpu_arch="amd64" ;;
-        armv5*) cpu_arch="armv5" ;;
-        armv6*) cpu_arch="armv6" ;;
-        armv7*) cpu_arch="armv7" ;;
         aarch64|arm64) cpu_arch="arm64" ;;
+        armv7l|armv7) cpu_arch="armv7" ;;
         i686|i386) cpu_arch="386" ;;
-        mips64*) cpu_arch="mips64" ;;
-        mips*) cpu_arch="mips" ;;
-        mipsel*) cpu_arch="mipsle" ;;
-        riscv64) cpu_arch="riscv64" ;;
-        *)
-            echo -e "${RED}Unsupported CPU architecture: $arch${NC}"
-            exit 1
-            ;;
+        *) cpu_arch="amd64" ;;
     esac
+    echo "$os $cpu_arch"
 }
 
-# 获取并安装 GOST（优化版）
-install_gost() {
-    version=$1
+# 安装 GOST v2
+install_gost_v2() {
+    local version=$1
+    echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}        GOST 一键安装脚本${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    
-    # 创建目录
-    echo -e "${YELLOW}[1/5] 创建安装目录...${NC}"
-    mkdir -p "$GOST_DIR"
     cd "$GOST_DIR" || return 1
     
-    # 检测系统和架构
-    echo -e "${YELLOW}[2/5] 检测系统环境...${NC}"
-    detect_os_arch
-    echo -e "      系统: ${os}, 架构: ${cpu_arch}"
+    local download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
     
-    # 获取下载地址
-    echo -e "${YELLOW}[3/5] 获取下载地址...${NC}"
-    get_download_url="$base_url/tags/$version"
-    download_url=$(curl -s "$get_download_url" | awk -F'"' -v re=".*${os}.*${cpu_arch}.*" '/"browser_download_url":/ && $4 ~ re { print $4 }' | head -n 1)
-    
-    if [[ -z "$download_url" ]]; then
-        echo -e "${RED}获取下载地址失败，尝试备用方法...${NC}"
-        # 备用：使用 releases/latest
-        get_download_url="$base_url/latest"
-        download_url=$(curl -s "$get_download_url" | awk -F'"' -v re=".*${os}.*${cpu_arch}.*" '/"browser_download_url":/ && $4 ~ re { print $4 }' | head -n 1)
-    fi
-    
-    if [[ -z "$download_url" ]]; then
-        echo -e "${RED}无法获取下载地址，请检查网络或版本号${NC}"
-        return 1
+    # 备用下载地址
+    if [[ "$cpu_arch" == "arm64" ]]; then
+        download_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
     fi
     
     echo -e "      下载地址: ${download_url}"
     
     # 下载并解压
-    echo -e "${YELLOW}[4/5] 下载并安装 GOST ${version}...${NC}"
+    wget -O gost.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.gz
     
-    if [[ "$download_url" == *.tar.gz ]]; then
-        curl -fsSL "$download_url" | tar -xzC "$GOST_DIR" gost 2>/dev/null || {
-            # 如果解压失败，尝试下载到临时文件
-            temp_file=$(mktemp)
-            curl -fsSL "$download_url" -o "$temp_file"
-            tar -xzf "$temp_file" -C "$GOST_DIR" gost 2>/dev/null
-            rm -f "$temp_file"
-        }
-    else
-        # 直接下载二进制文件
-        curl -fsSL "$download_url" -o gost
+    if [ ! -f "gost.gz" ]; then
+        echo -e "${RED}下载失败${NC}"
+        return 1
     fi
     
-    chmod +x "$GOST_BIN"
+    gunzip -f gost.gz
+    chmod +x gost
     
-    # 验证安装
-    echo -e "${YELLOW}[5/5] 验证安装...${NC}"
-    if [[ -f "$GOST_BIN" ]] && [[ -x "$GOST_BIN" ]]; then
-        echo -e "${GREEN}✓ GOST ${version} 安装成功！${NC}"
-        "$GOST_BIN" -V 2>/dev/null || echo -e "${YELLOW}GOST 可执行文件准备就绪${NC}"
+    # 验证
+    if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
+        echo -e "${GREEN}✓ GOST v2 ${version} 安装成功！${NC}"
         return 0
     else
-        echo -e "${RED}安装失败，请手动检查${NC}"
+        echo -e "${RED}安装失败${NC}"
         return 1
     fi
 }
 
-# 列出可用版本
-list_versions() {
-    echo -e "${BLUE}正在获取可用版本列表...${NC}"
-    versions=$(curl -s "$base_url" | awk -F'"' '/"tag_name":/ {print $4}' | head -20)
+# 安装 GOST v3
+install_gost_v3() {
+    local version=$1
+    echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
     
-    if [[ -z "$versions" ]]; then
-        echo -e "${RED}获取版本列表失败，将安装最新版${NC}"
-        install_gost "latest"
-        return $?
+    cd "$GOST_DIR" || return 1
+    
+    local download_url="https://github.com/go-gost/gost/releases/download/${version}/gost_${version#v}_${os}_${cpu_arch}.tar.gz"
+    
+    echo -e "      下载地址: ${download_url}"
+    
+    # 下载并解压
+    wget -O gost.tar.gz "$download_url" 2>/dev/null || curl -fsSL "$download_url" -o gost.tar.gz
+    
+    if [ ! -f "gost.tar.gz" ]; then
+        echo -e "${RED}下载失败${NC}"
+        return 1
     fi
     
-    echo -e "${GREEN}可用的 GOST 版本:${NC}"
-    select version in $versions "退出"; do
-        if [[ "$version" == "退出" ]]; then
+    tar -xzf gost.tar.gz gost 2>/dev/null || tar -xzf gost.tar.gz
+    chmod +x gost
+    
+    # 清理
+    rm -f gost.tar.gz
+    
+    # 验证
+    if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
+        echo -e "${GREEN}✓ GOST v3 ${version} 安装成功！${NC}"
+        return 0
+    else
+        echo -e "${RED}安装失败${NC}"
+        return 1
+    fi
+}
+
+# 获取 v2 版本列表
+get_v2_versions() {
+    echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
+    local versions=$(curl -s "https://api.github.com/repos/ginuerzh/gost/releases" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
+    
+    if [[ -z "$versions" ]]; then
+        # 手动列出常用版本
+        versions="2.11.5 2.11.4 2.11.3 2.11.2 2.11.1"
+    fi
+    
+    echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
+    select version in $versions "返回上级"; do
+        if [[ "$version" == "返回上级" ]]; then
             return 1
         elif [[ -n "$version" ]]; then
-            install_gost "$version"
+            install_gost_v2 "$version"
             return $?
         else
-            echo -e "${RED}无效选择，请重新选择${NC}"
+            echo -e "${RED}无效选择${NC}"
         fi
     done
+}
+
+# 获取 v3 版本列表
+get_v3_versions() {
+    echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
+    local versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/' | head -10)
+    
+    if [[ -z "$versions" ]]; then
+        versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
+    fi
+    
+    echo -e "${GREEN}可用的 GOST v3 版本:${NC}"
+    select version in $versions "返回上级"; do
+        if [[ "$version" == "返回上级" ]]; then
+            return 1
+        elif [[ -n "$version" ]]; then
+            install_gost_v3 "$version"
+            return $?
+        else
+            echo -e "${RED}无效选择${NC}"
+        fi
+    done
+}
+
+# 选择安装版本
+select_version_to_install() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}       选择 GOST 版本${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "  ${GREEN}1${NC}) GOST v2 (稳定版，推荐 Serv00)"
+    echo -e "  ${GREEN}2${NC}) GOST v3 (最新版)"
+    echo -e "  ${GREEN}0${NC}) 返回主菜单"
+    echo -e "${BLUE}========================================${NC}"
+    echo -n -e "${YELLOW}请选择 [0-2]: ${NC}"
+    
+    read choice
+    case $choice in
+        1) get_v2_versions ;;
+        2) get_v3_versions ;;
+        0) return 1 ;;
+        *) echo -e "${RED}无效选择${NC}"; return 1 ;;
+    esac
 }
 
 # 停止 GOST
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        echo -e "${YELLOW}正在停止现有 GOST 进程...${NC}"
+        echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
         pkill -f "$GOST_BIN" 2>/dev/null
-        sleep 2
+        sleep 1
         echo -e "${GREEN}✓ 已停止${NC}"
     fi
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
@@ -174,29 +205,28 @@ start_gost() {
     local ip=$(get_local_ip)
     
     case $protocol in
-        1)  # HTTP
+        1)
             cmd="$GOST_BIN -L http://${username}:${password}@:${port}"
             proxy_url="http://${username}:${password}@${ip}:${port}"
             echo -e "${GREEN}启动 HTTP 代理...${NC}"
             ;;
-        2)  # SOCKS5
+        2)
             cmd="$GOST_BIN -L socks5://${username}:${password}@:${port}"
             proxy_url="socks5://${username}:${password}@${ip}:${port}"
             echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
             ;;
-        3)  # 自适应（HTTP/SOCKS5）
+        3)
             cmd="$GOST_BIN -L ${username}:${password}@:${port}"
             proxy_url="http://${username}:${password}@${ip}:${port} / socks5://${username}:${password}@${ip}:${port}"
             echo -e "${GREEN}启动自适应代理 (HTTP + SOCKS5)...${NC}"
             ;;
-        4)  # 无加密自适应
+        4)
             cmd="$GOST_BIN -L :${port}"
             proxy_url="${ip}:${port} (无加密)"
             echo -e "${GREEN}启动无加密代理...${NC}"
             ;;
     esac
     
-    # 后台启动
     nohup $cmd > "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
@@ -220,7 +250,6 @@ start_gost() {
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     
-    # 创建保活脚本
     cat > "$GOST_DIR/keepalive.sh" << 'EOF'
 #!/usr/bin/env bash
 GOST_DIR="$HOME/GOST"
@@ -238,13 +267,11 @@ fi
 EOF
     chmod +x "$GOST_DIR/keepalive.sh"
     
-    # 保存当前启动命令
     local running_cmd=$(ps -ef | grep "$GOST_BIN" | grep -v grep | head -1 | sed 's/.*\.\/gost/\.\/gost/')
     if [ -n "$running_cmd" ]; then
         echo "$running_cmd" > "$GOST_DIR/start_cmd.txt"
     fi
     
-    # 写入 crontab
     (echo "$current_cron"; echo "@reboot $GOST_DIR/keepalive.sh"; echo "*/5 * * * * $GOST_DIR/keepalive.sh") | crontab -
     
     echo -e "${GREEN}✓ 已配置开机自启和进程保活（每5分钟检查）${NC}"
@@ -270,18 +297,16 @@ configure_proxy() {
     echo -e "${GREEN}          配置代理${NC}"
     echo -e "${BLUE}========================================${NC}"
     
-    # 输入端口
     while true; do
         echo -n -e "${YELLOW}请输入端口: ${NC}"
         read port
         if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
             break
         else
-            echo -e "${RED}端口无效，请输入1-65535之间的数字${NC}"
+            echo -e "${RED}端口无效${NC}"
         fi
     done
     
-    # 选择协议
     echo -e "${BLUE}请选择协议:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
@@ -291,7 +316,6 @@ configure_proxy() {
     read protocol
     [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
     
-    # 账号密码（协议4除外）
     local username="admin"
     local password="123456"
     
@@ -305,10 +329,8 @@ configure_proxy() {
         [ -n "$input_pass" ] && password="$input_pass"
     fi
     
-    # 启动代理
     start_gost "$protocol" "$port" "$username" "$password"
     
-    # 询问开机自启
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
@@ -319,11 +341,13 @@ configure_proxy() {
     read -n 1
 }
 
-# 显示当前状态
+# 显示状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
+        local version_info=$("$GOST_BIN" -V 2>&1 | head -1)
         echo -e "${GREEN}GOST 状态: 已安装${NC}"
+        echo -e "${GREEN}版本信息: ${version_info}${NC}"
         if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
             echo -e "${GREEN}代理状态: 运行中 ✓${NC}"
             local pid=$(pgrep -f "$GOST_BIN" | head -1)
@@ -356,7 +380,7 @@ show_menu() {
 
 # 主程序
 main() {
-    # 注意：移除了 root 检查，Serv00 无 root 权限
+    detect_os_arch > /dev/null
     
     while true; do
         show_menu
@@ -364,12 +388,14 @@ main() {
         
         case $choice in
             1)
-                list_versions
-                if [ $? -eq 0 ] && [ -f "$GOST_BIN" ]; then
-                    echo -n -e "${GREEN}是否配置代理？[y/N]: ${NC}"
-                    read config_now
-                    if [[ "$config_now" =~ ^[Yy]$ ]]; then
-                        configure_proxy
+                if select_version_to_install; then
+                    if [ -f "$GOST_BIN" ]; then
+                        echo
+                        echo -n -e "${GREEN}是否配置代理？[y/N]: ${NC}"
+                        read config_now
+                        if [[ "$config_now" =~ ^[Yy]$ ]]; then
+                            configure_proxy
+                        fi
                     fi
                 fi
                 ;;
@@ -389,14 +415,11 @@ main() {
                 exit 0
                 ;;
             *)
-                echo -e "${RED}无效选择，请输入 0-4${NC}"
+                echo -e "${RED}无效选择${NC}"
                 sleep 1
                 ;;
         esac
     done
 }
 
-# 检查是否直接运行
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main
-fi
+main
