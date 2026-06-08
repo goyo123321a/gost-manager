@@ -571,7 +571,7 @@ show_sub() {
     read -n 1
 }
 
-# 更新脚本
+# 更新脚本（增加快速命令提示）
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -585,7 +585,8 @@ update_script() {
             chmod +x "$0"
             rm -f "$temp_script"
             echo -e "${GREEN}✓ 脚本更新成功！${NC}"
-            echo -e "${YELLOW}（~/gost-manager.sh）重新运行。${NC}"
+            echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
+            echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
             echo -n -e "${GREEN}按任意键退出...${NC}"
             read -n 1
             exit 0
