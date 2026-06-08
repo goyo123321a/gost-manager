@@ -7,6 +7,8 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+SUBFILE="$HOME/sub.txt"
+
 # 获取本机 IP
 get_local_ip() {
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
@@ -308,7 +310,14 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
-# 启动代理
+# 保存节点信息到文件
+save_node_info() {
+    local info="$1"
+    echo "$info" > "$SUBFILE"
+    echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
+}
+
+# 启动代理（Shadowsocks 增加 Base64 输出，并保存节点信息）
 start_gost() {
     local protocol=$1
     local port=$2
@@ -318,27 +327,41 @@ start_gost() {
     stop_gost
     local cmd=""
     local proxy_url=""
+    local proxy_url_extra=""
     local ip=$(get_local_ip)
     case $protocol in
         1)
             cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
             proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 HTTP 代理...${NC}"
+            save_node_info "$proxy_url"
             ;;
         2)
             cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
             proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
+            save_node_info "$proxy_url"
             ;;
         3)
             cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
             proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动自适应代理...${NC}"
+            save_node_info "$proxy_url"
             ;;
         4)
             cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+            ss_link="${auth1}:${auth2}@${ip}:${port}"
+            # 生成 Base64 编码（兼容 Linux 和 macOS）
+            if command -v base64 >/dev/null 2>&1; then
+                ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
+            else
+                ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
+            fi
             proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
+            proxy_url_extra="ss://${ss_base64}"
             echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
+            # 保存节点信息（同时保存原始和Base64）
+            save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
             ;;
     esac
     nohup $cmd > "$GOST_LOG" 2>&1 &
@@ -350,6 +373,10 @@ start_gost() {
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${GREEN}代理链接:${NC}"
         echo -e "${YELLOW}${proxy_url}${NC}"
+        if [ -n "$proxy_url_extra" ]; then
+            echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
+            echo -e "${YELLOW}${proxy_url_extra}${NC}"
+        fi
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         return 0
     else
@@ -455,7 +482,7 @@ configure_proxy() {
         for i in "${!ss_method_names[@]}"; do
             echo "  $((i+1))) ${ss_method_names[$i]}"
         done
-        echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}]: ${NC}"
+        echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}] (默认 1): ${NC}"
         read method_choice
         if [[ -z "$method_choice" ]]; then
             method_choice=1
@@ -513,6 +540,21 @@ show_status() {
     read -n 1
 }
 
+# 查看节点信息
+show_sub() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}          节点信息${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    if [ -f "$SUBFILE" ] && [ -s "$SUBFILE" ]; then
+        echo -e "${YELLOW}$(cat "$SUBFILE")${NC}"
+    else
+        echo -e "${RED}暂无节点信息，请先配置代理。${NC}"
+    fi
+    echo -e "${BLUE}========================================${NC}"
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
+}
+
 # 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
@@ -552,9 +594,10 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}3${BLUE}) 查看状态                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}6${BLUE}) 查看节点信息                   ║${NC}"
     echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo -n -e "${YELLOW}请输入 [0-5]: ${NC}"
+    echo -n -e "${YELLOW}请输入 [0-6]: ${NC}"
 }
 
 # 主程序
@@ -578,6 +621,7 @@ main() {
             3) show_status ;;
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             5) update_script ;;
+            6) show_sub ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
         esac
