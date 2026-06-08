@@ -312,8 +312,8 @@ stop_gost() {
 start_gost() {
     local protocol=$1
     local port=$2
-    local method=$3
-    local pass=$4
+    local auth1=$3
+    local auth2=$4
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -321,23 +321,23 @@ start_gost() {
     local ip=$(get_local_ip)
     case $protocol in
         1)
-            cmd="$GOST_BIN -L http://${method}:${pass}@:${port}"
-            proxy_url="http://${method}:${pass}@${ip}:${port}"
+            cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
+            proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 HTTP 代理...${NC}"
             ;;
         2)
-            cmd="$GOST_BIN -L socks5://${method}:${pass}@:${port}"
-            proxy_url="socks5://${method}:${pass}@${ip}:${port}"
+            cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
+            proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
             ;;
         3)
-            cmd="$GOST_BIN -L ${method}:${pass}@:${port}"
-            proxy_url="http://${method}:${pass}@${ip}:${port} / socks5://${method}:${pass}@${ip}:${port}"
+            cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
+            proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动自适应代理...${NC}"
             ;;
         4)
-            cmd="$GOST_BIN -L ss://${method}:${pass}@:${port}"
-            proxy_url="ss://${method}:${pass}@${ip}:${port}"
+            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+            proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
             ;;
     esac
@@ -394,29 +394,6 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 显示 Shadowsocks 加密方法版本兼容性提示
-show_ss_cipher_hint() {
-    local gost_ver=$(get_gost_version)
-    if [[ "$gost_ver" == "0.0.0" ]]; then
-        echo -e "${YELLOW}提示: 未检测到 GOST 版本，请先安装。${NC}"
-        return
-    fi
-    echo -e "${BLUE}当前 GOST 版本: ${gost_ver}${NC}"
-    if version_ge "$gost_ver" "2.8.0"; then
-        if version_ge "$gost_ver" "3.1.0"; then
-            echo -e "${GREEN}✅ 支持 AEAD 加密 (推荐): aes-*-gcm, chacha20-ietf-poly1305${NC}"
-            echo -e "${YELLOW}⚠️  不支持传统流加密 (aes-*-cfb, chacha20 等)${NC}"
-        else
-            echo -e "${GREEN}✅ 支持所有加密方式 (包括 AEAD 和传统流加密)${NC}"
-            echo -e "${GREEN}   推荐使用: aes-256-gcm, chacha20-ietf-poly1305${NC}"
-        fi
-    else
-        echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。请升级到 v2.8+。${NC}"
-        return 1
-    fi
-    return 0
-}
-
 # 配置代理流程
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
@@ -450,16 +427,46 @@ configure_proxy() {
 
     if [ "$protocol" -eq 4 ]; then
         echo -e "${BLUE}Shadowsocks 配置${NC}"
-        # 显示版本兼容性提示
-        show_ss_cipher_hint
-        if [ $? -ne 0 ]; then
+        
+        local gost_ver=$(get_gost_version)
+        local ss_methods=()
+        local ss_method_names=()
+        
+        if version_ge "$gost_ver" "2.8.0"; then
+            if version_ge "$gost_ver" "3.1.0"; then
+                # v3.1.0+ 仅支持 AEAD
+                ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
+                ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
+                echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
+            else
+                # v2.8.0 - v3.0.x 支持全部
+                ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
+                ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
+                echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
+            fi
+        else
+            echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。请升级到 v2.8+。${NC}"
             echo -n -e "${GREEN}按任意键返回...${NC}"
             read -n 1
             return 1
         fi
-        echo -n -e "${YELLOW}加密方式 (默认 aes-256-gcm, 可输入其他如 chacha20-ietf-poly1305): ${NC}"
-        read input_method
-        [ -n "$input_method" ] && method="$input_method"
+        
+        echo -e "${YELLOW}请选择加密方式:${NC}"
+        for i in "${!ss_method_names[@]}"; do
+            echo "  $((i+1))) ${ss_method_names[$i]}"
+        done
+        echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}]: ${NC}"
+        read method_choice
+        if [[ -z "$method_choice" ]]; then
+            method_choice=1
+        fi
+        if [[ "$method_choice" -ge 1 ]] && [[ "$method_choice" -le ${#ss_methods[@]} ]]; then
+            method="${ss_methods[$((method_choice-1))]}"
+        else
+            echo -e "${RED}无效选择，使用默认 aes-256-gcm${NC}"
+            method="aes-256-gcm"
+        fi
+        echo -e "${GREEN}已选择加密方式: ${method}${NC}"
         echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
