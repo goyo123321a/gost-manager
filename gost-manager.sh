@@ -67,6 +67,27 @@ detect_os_arch() {
     esac
 }
 
+# 获取 GOST 版本号（用于兼容性检查）
+get_gost_version() {
+    if [ ! -f "$GOST_BIN" ]; then
+        echo "0.0.0"
+        return
+    fi
+    local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ -z "$ver" ]; then
+        echo "0.0.0"
+    else
+        echo "$ver"
+    fi
+}
+
+# 版本比较函数
+version_ge() {
+    local v1=$1
+    local v2=$2
+    [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
+}
+
 # 版本比较：是否 >= 2.12（新格式从此版本开始）
 version_ge_2_12() {
     local v=$1
@@ -291,8 +312,8 @@ stop_gost() {
 start_gost() {
     local protocol=$1
     local port=$2
-    local username=$3
-    local password=$4
+    local method=$3
+    local pass=$4
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -300,19 +321,24 @@ start_gost() {
     local ip=$(get_local_ip)
     case $protocol in
         1)
-            cmd="$GOST_BIN -L http://${username}:${password}@:${port}"
-            proxy_url="http://${username}:${password}@${ip}:${port}"
+            cmd="$GOST_BIN -L http://${method}:${pass}@:${port}"
+            proxy_url="http://${method}:${pass}@${ip}:${port}"
             echo -e "${GREEN}启动 HTTP 代理...${NC}"
             ;;
         2)
-            cmd="$GOST_BIN -L socks5://${username}:${password}@:${port}"
-            proxy_url="socks5://${username}:${password}@${ip}:${port}"
+            cmd="$GOST_BIN -L socks5://${method}:${pass}@:${port}"
+            proxy_url="socks5://${method}:${pass}@${ip}:${port}"
             echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
             ;;
         3)
-            cmd="$GOST_BIN -L ${username}:${password}@:${port}"
-            proxy_url="http://${username}:${password}@${ip}:${port} / socks5://${username}:${password}@${ip}:${port}"
+            cmd="$GOST_BIN -L ${method}:${pass}@:${port}"
+            proxy_url="http://${method}:${pass}@${ip}:${port} / socks5://${method}:${pass}@${ip}:${port}"
             echo -e "${GREEN}启动自适应代理...${NC}"
+            ;;
+        4)
+            cmd="$GOST_BIN -L ss://${method}:${pass}@:${port}"
+            proxy_url="ss://${method}:${pass}@${ip}:${port}"
+            echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
             ;;
     esac
     nohup $cmd > "$GOST_LOG" 2>&1 &
@@ -368,6 +394,29 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
+# 显示 Shadowsocks 加密方法版本兼容性提示
+show_ss_cipher_hint() {
+    local gost_ver=$(get_gost_version)
+    if [[ "$gost_ver" == "0.0.0" ]]; then
+        echo -e "${YELLOW}提示: 未检测到 GOST 版本，请先安装。${NC}"
+        return
+    fi
+    echo -e "${BLUE}当前 GOST 版本: ${gost_ver}${NC}"
+    if version_ge "$gost_ver" "2.8.0"; then
+        if version_ge "$gost_ver" "3.1.0"; then
+            echo -e "${GREEN}✅ 支持 AEAD 加密 (推荐): aes-*-gcm, chacha20-ietf-poly1305${NC}"
+            echo -e "${YELLOW}⚠️  不支持传统流加密 (aes-*-cfb, chacha20 等)${NC}"
+        else
+            echo -e "${GREEN}✅ 支持所有加密方式 (包括 AEAD 和传统流加密)${NC}"
+            echo -e "${GREEN}   推荐使用: aes-256-gcm, chacha20-ietf-poly1305${NC}"
+        fi
+    else
+        echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。请升级到 v2.8+。${NC}"
+        return 1
+    fi
+    return 0
+}
+
 # 配置代理流程
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
@@ -390,19 +439,41 @@ configure_proxy() {
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
-    echo -n -e "${YELLOW}请输入 [1-3]: ${NC}"
+    echo -e "  ${GREEN}4${NC}) Shadowsocks"
+    echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
     read protocol
-    [[ ! "$protocol" =~ ^[1-3]$ ]] && protocol=3
+    [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
+
     local username="admin"
     local password="123456"
-    echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
-    echo -n -e "${YELLOW}账号 [admin]: ${NC}"
-    read input_user
-    [ -n "$input_user" ] && username="$input_user"
-    echo -n -e "${YELLOW}密码 [123456]: ${NC}"
-    read input_pass
-    [ -n "$input_pass" ] && password="$input_pass"
-    start_gost "$protocol" "$port" "$username" "$password"
+    local method="aes-256-gcm"
+
+    if [ "$protocol" -eq 4 ]; then
+        echo -e "${BLUE}Shadowsocks 配置${NC}"
+        # 显示版本兼容性提示
+        show_ss_cipher_hint
+        if [ $? -ne 0 ]; then
+            echo -n -e "${GREEN}按任意键返回...${NC}"
+            read -n 1
+            return 1
+        fi
+        echo -n -e "${YELLOW}加密方式 (默认 aes-256-gcm, 可输入其他如 chacha20-ietf-poly1305): ${NC}"
+        read input_method
+        [ -n "$input_method" ] && method="$input_method"
+        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
+        read input_pass
+        [ -n "$input_pass" ] && password="$input_pass"
+    else
+        echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
+        echo -n -e "${YELLOW}账号 [admin]: ${NC}"
+        read input_user
+        [ -n "$input_user" ] && username="$input_user"
+        echo -n -e "${YELLOW}密码 [123456]: ${NC}"
+        read input_pass
+        [ -n "$input_pass" ] && password="$input_pass"
+    fi
+
+    start_gost "$protocol" "$port" "${method:-$username}" "$password"
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
