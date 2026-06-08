@@ -22,7 +22,7 @@
 
 ### GOST-V2[GitHub仓库](https://github.com/ginuerzh/gost)
 ### GOST-V3[GitHub仓库](https://github.com/go-gost/gost)
-### [GOST使用方法](https://v2.gost.run/getting-started/)
+### [GOST介绍](https://v2.gost.run/getting-started/)
 
 
 ## 🚀 快速开始
