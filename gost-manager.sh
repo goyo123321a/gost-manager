@@ -323,7 +323,7 @@ start_gost() {
     local port=$2
     local auth1=$3
     local auth2=$4
-    local name=$5   # 新增节点名称参数，仅 Shadowsocks 使用
+    local name=$5   # 节点名称参数，仅 Shadowsocks 使用
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -513,7 +513,10 @@ configure_proxy() {
         else
             node_name="GOST-SS"
         fi
+        # 调用启动函数（Shadowsocks）
+        start_gost "$protocol" "$port" "$method" "$password" "$node_name"
     else
+        # HTTP / SOCKS5 / 自适应
         echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
         echo -n -e "${YELLOW}账号 [admin]: ${NC}"
         read input_user
@@ -521,9 +524,10 @@ configure_proxy() {
         echo -n -e "${YELLOW}密码 [123456]: ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
+        # 调用启动函数（非 Shadowsocks）
+        start_gost "$protocol" "$port" "$username" "$password"
     fi
 
-    start_gost "$protocol" "$port" "${method:-$username}" "$password" "$node_name"
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
