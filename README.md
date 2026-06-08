@@ -19,9 +19,11 @@
 - **一键卸载**：停止进程、删除文件、清除 crontab 任务。
 - **在线更新**：脚本自身支持从远程仓库更新。
 ```
+
 ### GOSTV2[GitHub仓库](https://github.com/ginuerzh/gost)
 ### GOSTV3[GitHub仓库](https://github.com/go-gost/gost)
-### GOST使用方法[GitHub仓库](https://v2.gost.run/getting-started/)
+### [GOST使用方法](https://v2.gost.run/getting-started/)
+
 
 ## 🚀 快速开始
 
