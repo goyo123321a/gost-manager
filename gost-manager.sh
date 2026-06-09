@@ -9,19 +9,16 @@ NC='\033[0m'
 
 SUBFILE="$HOME/sub.txt"
 
-# 获取本机 IP（优先 IPv4，若无则 IPv6）
+# 获取本机 IP
 get_local_ip() {
-    local ipv4=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
-    if [ -n "$ipv4" ]; then
-        echo "$ipv4"
-        return
+    local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
+    if [ -z "$ip" ]; then
+        ip=$(hostname -i 2>/dev/null | awk '{print $1}')
     fi
-    local ipv6=$(ip -6 addr show 2>/dev/null | grep -o 'inet6 [0-9a-f:]*' | grep -v '::1' | head -1 | cut -d' ' -f2)
-    if [ -n "$ipv6" ]; then
-        echo "$ipv6"
-        return
+    if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
+        ip="$(hostname)"
     fi
-    hostname -i 2>/dev/null | awk '{print $1}' || echo "unknown"
+    echo "$ip"
 }
 
 # 工作目录设置（自动适配 root/普通用户）
@@ -308,6 +305,7 @@ stop_gost() {
         echo -e "${YELLOW}正在停止 GOST 进程...${NC}"
         pkill -f "$GOST_BIN" 2>/dev/null
         sleep 1
+        # 再次检查是否还有残留进程
         if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
             echo -e "${RED}强制停止...${NC}"
             pkill -9 -f "$GOST_BIN" 2>/dev/null
@@ -316,6 +314,7 @@ stop_gost() {
     else
         echo -e "${YELLOW}没有找到运行中的 GOST 进程${NC}"
     fi
+    # 删除 PID 文件
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
@@ -326,13 +325,13 @@ save_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 启动代理
+# 启动代理（Shadowsocks 增加 Base64 输出，并保存节点信息，支持节点名称）
 start_gost() {
     local protocol=$1
     local port=$2
     local auth1=$3
     local auth2=$4
-    local name=$5
+    local name=$5   # 节点名称参数，仅 Shadowsocks 使用
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -361,11 +360,13 @@ start_gost() {
         4)
             cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
             ss_link="${auth1}:${auth2}@${ip}:${port}"
+            # 生成 Base64 编码（兼容 Linux 和 macOS）
             if command -v base64 >/dev/null 2>&1; then
                 ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
             else
                 ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
             fi
+            # 构造带名称的链接
             if [ -n "$name" ]; then
                 proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${name}"
                 proxy_url_extra="ss://${ss_base64}#${name}"
@@ -374,6 +375,7 @@ start_gost() {
                 proxy_url_extra="ss://${ss_base64}"
             fi
             echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
+            # 保存节点信息（同时保存原始和带名称的Base64）
             save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
             ;;
     esac
@@ -468,15 +470,19 @@ configure_proxy() {
 
     if [ "$protocol" -eq 4 ]; then
         echo -e "${BLUE}Shadowsocks 配置${NC}"
+        
         local gost_ver=$(get_gost_version)
         local ss_methods=()
         local ss_method_names=()
+        
         if version_ge "$gost_ver" "2.8.0"; then
             if version_ge "$gost_ver" "3.1.0"; then
+                # v3.1.0+ 仅支持 AEAD
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
                 ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
                 echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
             else
+                # v2.8.0 - v3.0.x 支持全部
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
                 ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
                 echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
@@ -487,6 +493,7 @@ configure_proxy() {
             read -n 1
             return 1
         fi
+        
         echo -e "${YELLOW}请选择加密方式:${NC}"
         for i in "${!ss_method_names[@]}"; do
             echo "  $((i+1))) ${ss_method_names[$i]}"
@@ -506,11 +513,18 @@ configure_proxy() {
         echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
+        # 输入节点名称
         echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
         read input_name
-        node_name="${input_name:-GOST-SS}"
+        if [ -n "$input_name" ]; then
+            node_name="$input_name"
+        else
+            node_name="GOST-SS"
+        fi
+        # 调用启动函数（Shadowsocks）
         start_gost "$protocol" "$port" "$method" "$password" "$node_name"
     else
+        # HTTP / SOCKS5 / 自适应
         echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
         echo -n -e "${YELLOW}账号 [admin]: ${NC}"
         read input_user
@@ -518,6 +532,7 @@ configure_proxy() {
         echo -n -e "${YELLOW}密码 [123456]: ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
+        # 调用启动函数（非 Shadowsocks）
         start_gost "$protocol" "$port" "$username" "$password"
     fi
 
@@ -530,7 +545,7 @@ configure_proxy() {
     read -n 1
 }
 
-# 显示状态（含本机IP）
+# 显示状态（新增本机 IP 显示）
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          系统状态${NC}"
@@ -572,7 +587,7 @@ show_sub() {
     read -n 1
 }
 
-# 更新脚本（支持IPv6）
+# 更新脚本（增加手动命令提示）
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -580,7 +595,10 @@ update_script() {
     local script_url="https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh"
     local temp_script="/tmp/gost-manager-update.sh"
     echo -e "${YELLOW}正在从远程仓库下载最新脚本...${NC}"
-    if wget -q --timeout=10 -O "$temp_script" "$script_url" 2>/dev/null || curl -fsSL --connect-timeout 10 "$script_url" -o "$temp_script" 2>/dev/null; then
+    
+    # 增加超时时间和重试
+    if wget -q --timeout=30 --tries=2 -O "$temp_script" "$script_url" 2>/dev/null || \
+       curl -fsSL --connect-timeout 30 --retry 2 "$script_url" -o "$temp_script" 2>/dev/null; then
         if [ -s "$temp_script" ]; then
             cp "$temp_script" "$0"
             chmod +x "$0"
@@ -595,26 +613,10 @@ update_script() {
             echo -e "${RED}下载的文件为空，更新失败${NC}"
         fi
     else
-        # 尝试强制IPv6
-        echo -e "${YELLOW}普通方式失败，尝试使用IPv6...${NC}"
-        if curl -6 -fsSL --connect-timeout 10 "$script_url" -o "$temp_script" 2>/dev/null; then
-            if [ -s "$temp_script" ]; then
-                cp "$temp_script" "$0"
-                chmod +x "$0"
-                rm -f "$temp_script"
-                echo -e "${GREEN}✓ 通过IPv6更新成功！${NC}"
-                echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
-                echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
-                echo -n -e "${GREEN}按任意键退出...${NC}"
-                read -n 1
-                exit 0
-            else
-                echo -e "${RED}通过IPv6下载的文件为空，更新失败${NC}"
-            fi
-        else
-            echo -e "${RED}下载失败，请手动下载。${NC}"
-            echo -e "${YELLOW}手动命令: curl -6 -o ~/gost-manager.sh ${script_url} && chmod +x ~/gost-manager.sh${NC}"
-        fi
+        echo -e "${RED}自动下载失败，可能是网络问题。${NC}"
+        echo -e "${YELLOW}请手动执行以下命令更新脚本：${NC}"
+        echo -e "${GREEN}curl -fsSL ${script_url} -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh${NC}"
+        echo -e "${YELLOW}然后重新运行 ~/gost-manager.sh${NC}"
     fi
     echo -n -e "${GREEN}按任意键返回菜单...${NC}"
     read -n 1
