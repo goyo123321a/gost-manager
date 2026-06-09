@@ -21,7 +21,7 @@ get_local_ip() {
     echo "$ip"
 }
 
-# 工作目录设置（自动适配 root/普通用户）
+# 工作目录设置
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -52,7 +52,6 @@ setup_workspace() {
 }
 setup_workspace
 
-# 检测系统和架构
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -69,28 +68,20 @@ detect_os_arch() {
     esac
 }
 
-# 获取 GOST 版本号（用于兼容性检查）
 get_gost_version() {
     if [ ! -f "$GOST_BIN" ]; then
         echo "0.0.0"
         return
     fi
     local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    if [ -z "$ver" ]; then
-        echo "0.0.0"
-    else
-        echo "$ver"
-    fi
+    [ -z "$ver" ] && echo "0.0.0" || echo "$ver"
 }
 
-# 版本比较函数
 version_ge() {
-    local v1=$1
-    local v2=$2
+    local v1=$1 v2=$2
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
-# 版本比较：是否 >= 2.12（新格式从此版本开始）
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -100,7 +91,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 v2（兼容新旧格式）
+# 安装 v2
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -120,7 +111,6 @@ install_gost_v2() {
         fi
     fi
 
-    # 旧格式 .gz（多种备选URL）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
@@ -191,7 +181,6 @@ install_gost_v3() {
     return 1
 }
 
-# 获取 v2 版本列表（默认选择第一个）
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
@@ -202,74 +191,47 @@ get_v2_versions() {
     local version_array=($versions)
     local version_count=${#version_array[@]}
     echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
-    for i in "${!version_array[@]}"; do
-        echo "  $((i+1))) ${version_array[$i]}"
-    done
+    for i in "${!version_array[@]}"; do echo "  $((i+1))) ${version_array[$i]}"; done
     echo "  $((version_count+1))) 返回上级"
     echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
     read choice
-    if [[ -z "$choice" ]]; then
-        choice=1
-    fi
-    if [[ "$choice" -eq $((version_count+1)) ]]; then
-        return 1
-    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
-        local selected_version="${version_array[$((choice-1))]}"
-        install_gost_v2 "$selected_version"
+    [[ -z "$choice" ]] && choice=1
+    if [[ "$choice" -eq $((version_count+1)) ]]; then return 1
+    elif [[ "$choice" -ge 1 && "$choice" -le "$version_count" ]]; then
+        install_gost_v2 "${version_array[$((choice-1))]}"
         return $?
-    else
-        echo -e "${RED}无效选择${NC}"
-        return 1
-    fi
+    else echo -e "${RED}无效选择${NC}"; return 1; fi
 }
 
-# 获取 v3 版本列表（过滤预发布版本，默认选择第一个稳定版）
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
     local versions=""
     if [[ -z "$all_versions" ]]; then
-        # 备用列表只包含稳定版
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2 v3.2.1 v3.2.0"
     else
-        # 过滤掉包含 nightly, rc, alpha, beta 的预发布版本
         versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
     fi
-    
     local version_array=($versions)
     local version_count=${#version_array[@]}
-    
     if [ $version_count -eq 0 ]; then
         echo -e "${RED}未找到稳定版本，使用备用列表${NC}"
         version_array=(v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2)
         version_count=${#version_array[@]}
     fi
-    
     echo -e "${GREEN}可用的 GOST v3 稳定版本:${NC}"
-    for i in "${!version_array[@]}"; do
-        echo "  $((i+1))) ${version_array[$i]}"
-    done
+    for i in "${!version_array[@]}"; do echo "  $((i+1))) ${version_array[$i]}"; done
     echo "  $((version_count+1))) 返回上级"
-    
     echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
     read choice
-    if [[ -z "$choice" ]]; then
-        choice=1
-    fi
-    
-    if [[ "$choice" -eq $((version_count+1)) ]]; then
-        return 1
-    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
-        local selected_version="${version_array[$((choice-1))]}"
-        install_gost_v3 "$selected_version"
+    [[ -z "$choice" ]] && choice=1
+    if [[ "$choice" -eq $((version_count+1)) ]]; then return 1
+    elif [[ "$choice" -ge 1 && "$choice" -le "$version_count" ]]; then
+        install_gost_v3 "${version_array[$((choice-1))]}"
         return $?
-    else
-        echo -e "${RED}无效选择${NC}"
-        return 1
-    fi
+    else echo -e "${RED}无效选择${NC}"; return 1; fi
 }
 
-# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
@@ -288,7 +250,6 @@ select_version_to_install() {
     esac
 }
 
-# 停止 GOST
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
         echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
@@ -299,22 +260,14 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
-# 保存节点信息到文件
 save_node_info() {
     local info="$1"
     echo "$info" > "$SUBFILE"
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 启动代理（支持服务端和客户端，支持路径）
 start_gost() {
-    local mode=$1          # server 或 client
-    local port=$2
-    local proto=$3         # 服务端：协议类型；客户端：本地协议
-    local auth1=$4
-    local auth2=$5
-    local forward=$6       # 客户端转发地址
-    local ws_path=$7
+    local mode=$1 port=$2 proto=$3 auth1=$4 auth2=$5 forward=$6 ws_path=$7
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -323,72 +276,44 @@ start_gost() {
 
     if [ "$mode" = "server" ]; then
         case $proto in
-            1)
-                cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
-                proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
-                echo -e "${GREEN}启动 HTTP 代理...${NC}"
-                ;;
-            2)
-                cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
-                proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
-                echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
-                ;;
-            3)
-                cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
-                proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
-                echo -e "${GREEN}启动自适应代理...${NC}"
-                ;;
-            4)
-                cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
-                ss_link="${auth1}:${auth2}@${ip}:${port}"
-                if command -v base64 >/dev/null 2>&1; then
-                    ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
-                else
-                    ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
-                fi
-                if [ -n "$auth2" ]; then
-                    proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${auth2}"
-                    proxy_url_extra="ss://${ss_base64}#${auth2}"
-                else
-                    proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
-                    proxy_url_extra="ss://${ss_base64}"
-                fi
-                echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
-                ;;
-            5)
-                # WebSocket 无认证
-                local listen_addr="ws://:${port}"
-                if [ -n "$ws_path" ]; then
-                    listen_addr="ws://:${port}?path=${ws_path}"
-                fi
-                cmd="$GOST_BIN -L ${listen_addr}"
-                proxy_url="ws://${ip}:${port}"
-                [ -n "$ws_path" ] && proxy_url="${proxy_url}?path=${ws_path}"
-                echo -e "${GREEN}启动 WebSocket 代理（无认证）...${NC}"
-                ;;
-            6)
-                # Relay+WebSocket 带认证
-                local listen_addr="relay+ws://${auth1}:${auth2}@:${port}"
-                if [ -n "$ws_path" ]; then
-                    listen_addr="relay+ws://${auth1}:${auth2}@:${port}?path=${ws_path}"
-                fi
-                cmd="$GOST_BIN -L ${listen_addr}"
-                proxy_url="relay+ws://${auth1}:${auth2}@${ip}:${port}"
-                [ -n "$ws_path" ] && proxy_url="${proxy_url}?path=${ws_path}"
-                echo -e "${GREEN}启动 Relay+WebSocket 代理（带认证）...${NC}"
-                ;;
-            7)
-                cmd="$GOST_BIN -L relay://${auth1}:${auth2}@:${port}"
-                proxy_url="relay://${auth1}:${auth2}@${ip}:${port}"
-                echo -e "${GREEN}启动 Relay 代理（纯转发，带认证）...${NC}"
-                ;;
+            1) cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
+               proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
+               echo -e "${GREEN}启动 HTTP 代理...${NC}" ;;
+            2) cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
+               proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
+               echo -e "${GREEN}启动 SOCKS5 代理...${NC}" ;;
+            3) cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
+               proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
+               echo -e "${GREEN}启动自适应代理...${NC}" ;;
+            4) cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+               ss_link="${auth1}:${auth2}@${ip}:${port}"
+               if command -v base64 >/dev/null 2>&1; then
+                   ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
+               else
+                   ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
+               fi
+               proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
+               proxy_url_extra="ss://${ss_base64}"
+               echo -e "${GREEN}启动 Shadowsocks 代理...${NC}" ;;
+            5) local listen_addr="ws://:${port}"
+               [ -n "$ws_path" ] && listen_addr="ws://:${port}?path=${ws_path}"
+               cmd="$GOST_BIN -L ${listen_addr}"
+               proxy_url="ws://${ip}:${port}"
+               [ -n "$ws_path" ] && proxy_url="${proxy_url}?path=${ws_path}"
+               echo -e "${GREEN}启动 WebSocket 代理（无认证）...${NC}" ;;
+            6) local listen_addr="relay+ws://${auth1}:${auth2}@:${port}"
+               [ -n "$ws_path" ] && listen_addr="relay+ws://${auth1}:${auth2}@:${port}?path=${ws_path}"
+               cmd="$GOST_BIN -L ${listen_addr}"
+               proxy_url="relay+ws://${auth1}:${auth2}@${ip}:${port}"
+               [ -n "$ws_path" ] && proxy_url="${proxy_url}?path=${ws_path}"
+               echo -e "${GREEN}启动 Relay+WebSocket 代理（带认证）...${NC}" ;;
+            7) cmd="$GOST_BIN -L relay://${auth1}:${auth2}@:${port}"
+               proxy_url="relay://${auth1}:${auth2}@${ip}:${port}"
+               echo -e "${GREEN}启动 Relay 代理（纯转发，带认证）...${NC}" ;;
         esac
         save_node_info "$proxy_url"
-        if [ -n "$proxy_url_extra" ]; then
-            proxy_url="$proxy_url_extra"
-        fi
+        [ -n "$proxy_url_extra" ] && proxy_url="$proxy_url_extra"
     else
-        # 客户端模式
         local local_proto="$proto"
         local local_auth="$auth1"
         local forward_addr="$forward"
@@ -412,10 +337,7 @@ start_gost() {
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${GREEN}代理链接:${NC}"
         echo -e "${YELLOW}${proxy_url}${NC}"
-        if [ -n "$proxy_url_extra" ]; then
-            echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
-            echo -e "${YELLOW}${proxy_url_extra}${NC}"
-        fi
+        [ -n "$proxy_url_extra" ] && echo -e "${GREEN}Base64 编码:${NC}\n${YELLOW}${proxy_url_extra}${NC}"
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         return 0
     else
@@ -424,7 +346,6 @@ start_gost() {
     fi
 }
 
-# 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -444,14 +365,11 @@ fi
 EOF
     chmod +x "$GOST_DIR/keepalive.sh"
     local running_cmd=$(ps -ef | grep "$GOST_BIN" | grep -v grep | head -1 | sed 's/.*\.\/gost/\.\/gost/')
-    if [ -n "$running_cmd" ]; then
-        echo "$running_cmd" > "$GOST_DIR/start_cmd.txt"
-    fi
+    [ -n "$running_cmd" ] && echo "$running_cmd" > "$GOST_DIR/start_cmd.txt"
     (echo "$current_cron"; echo "@reboot $GOST_DIR/keepalive.sh"; echo "*/5 * * * * $GOST_DIR/keepalive.sh") | crontab -
     echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
-# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}正在卸载 GOST...${NC}"
     stop_gost
@@ -460,7 +378,7 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置服务端（不变）
+# 配置服务端（省略，与之前相同，保持完整）
 configure_server() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置服务端（本地代理）${NC}"
@@ -486,31 +404,21 @@ configure_server() {
     read protocol
     [[ ! "$protocol" =~ ^[1-7]$ ]] && protocol=3
 
-    local username="admin"
-    local password="123456"
-    local method="aes-256-gcm"
-    local node_name=""
-    local ws_path=""
-
+    local username="admin" password="123456" method="aes-256-gcm" node_name="" ws_path=""
     if [ "$protocol" -eq 5 ] || [ "$protocol" -eq 6 ]; then
         echo -n -e "${YELLOW}是否设置 WebSocket 路径？[y/N]: ${NC}"
         read set_path
         if [[ "$set_path" =~ ^[Yy]$ ]]; then
             echo -n -e "${YELLOW}请输入路径 (默认 /ws): ${NC}"
             read input_path
-            if [ -n "$input_path" ]; then
-                ws_path="$input_path"
-            else
-                ws_path="/ws"
-            fi
+            ws_path="${input_path:-/ws}"
         fi
     fi
 
     if [ "$protocol" -eq 4 ]; then
         echo -e "${BLUE}Shadowsocks 配置${NC}"
         local gost_ver=$(get_gost_version)
-        local ss_methods=()
-        local ss_method_names=()
+        local ss_methods=() ss_method_names=()
         if version_ge "$gost_ver" "2.8.0"; then
             if version_ge "$gost_ver" "3.1.0"; then
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
@@ -522,67 +430,46 @@ configure_server() {
                 echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
             fi
         else
-            echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。请升级到 v2.8+。${NC}"
-            echo -n -e "${GREEN}按任意键返回...${NC}"
-            read -n 1
-            return 1
+            echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。${NC}"
+            echo -n -e "${GREEN}按任意键返回...${NC}"; read -n 1; return 1
         fi
         echo -e "${YELLOW}请选择加密方式:${NC}"
-        for i in "${!ss_method_names[@]}"; do
-            echo "  $((i+1))) ${ss_method_names[$i]}"
-        done
+        for i in "${!ss_method_names[@]}"; do echo "  $((i+1))) ${ss_method_names[$i]}"; done
         echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}] (默认 1): ${NC}"
         read method_choice
-        if [[ -z "$method_choice" ]]; then
-            method_choice=1
-        fi
-        if [[ "$method_choice" -ge 1 ]] && [[ "$method_choice" -le ${#ss_methods[@]} ]]; then
+        method_choice="${method_choice:-1}"
+        if [[ "$method_choice" -ge 1 && "$method_choice" -le ${#ss_methods[@]} ]]; then
             method="${ss_methods[$((method_choice-1))]}"
         else
-            echo -e "${RED}无效选择，使用默认 aes-256-gcm${NC}"
             method="aes-256-gcm"
         fi
         echo -e "${GREEN}已选择加密方式: ${method}${NC}"
         echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
+        read input_pass; [ -n "$input_pass" ] && password="$input_pass"
         echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
-        read input_name
-        [ -n "$input_name" ] && node_name="$input_name" || node_name="GOST-SS"
+        read input_name; node_name="${input_name:-GOST-SS}"
         start_gost "server" "$port" "$protocol" "$method" "$password" "" "$ws_path"
     elif [ "$protocol" -eq 5 ]; then
         start_gost "server" "$port" "$protocol" "" "" "" "$ws_path"
     elif [ "$protocol" -eq 6 ]; then
         echo -e "${BLUE}Relay+WebSocket 需要认证${NC}"
-        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
-        read input_user
-        [ -n "$input_user" ] && username="$input_user"
-        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
+        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read input_user; [ -n "$input_user" ] && username="$input_user"
+        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read input_pass; [ -n "$input_pass" ] && password="$input_pass"
         start_gost "server" "$port" "$protocol" "$username" "$password" "" "$ws_path"
     elif [ "$protocol" -eq 7 ]; then
         echo -e "${BLUE}Relay 协议需要认证${NC}"
-        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
-        read input_user
-        [ -n "$input_user" ] && username="$input_user"
-        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
+        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read input_user; [ -n "$input_user" ] && username="$input_user"
+        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read input_pass; [ -n "$input_pass" ] && password="$input_pass"
         start_gost "server" "$port" "$protocol" "$username" "$password"
     else
         echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
-        echo -n -e "${YELLOW}账号 [admin]: ${NC}"
-        read input_user
-        [ -n "$input_user" ] && username="$input_user"
-        echo -n -e "${YELLOW}密码 [123456]: ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
+        echo -n -e "${YELLOW}账号 [admin]: ${NC}"; read input_user; [ -n "$input_user" ] && username="$input_user"
+        echo -n -e "${YELLOW}密码 [123456]: ${NC}"; read input_pass; [ -n "$input_pass" ] && password="$input_pass"
         start_gost "server" "$port" "$protocol" "$username" "$password"
     fi
 }
 
-# 客户端配置（仅去除空格，无智能转换）
+# 客户端配置（支持 wss 和 relay+wss）
 configure_client() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置客户端（链式代理）${NC}"
@@ -593,32 +480,21 @@ configure_client() {
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
     read local_proto_choice
-    if [[ "$local_proto_choice" == "1" ]]; then
-        local_proto="http"
-    else
-        local_proto="socks5"
-    fi
+    local_proto="$([ "$local_proto_choice" = "1" ] && echo "http" || echo "socks5")"
     
     while true; do
         echo -n -e "${YELLOW}请输入本地监听端口: ${NC}"
         read port
-        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-            break
-        else
-            echo -e "${RED}端口无效${NC}"
-        fi
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then break
+        else echo -e "${RED}端口无效${NC}"; fi
     done
     
     echo -n -e "${YELLOW}是否为本地代理添加认证？[y/N]: ${NC}"
     read need_auth
     local auth_str=""
     if [[ "$need_auth" =~ ^[Yy]$ ]]; then
-        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
-        read user
-        [ -z "$user" ] && user="admin"
-        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-        read pass
-        [ -z "$pass" ] && pass="123456"
+        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read user; user="${user:-admin}"
+        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read pass; pass="${pass:-123456}"
         auth_str="${user}:${pass}"
     fi
     
@@ -626,73 +502,64 @@ configure_client() {
     echo -e "  ${GREEN}1${NC}) WebSocket (ws，无认证)"
     echo -e "  ${GREEN}2${NC}) Relay+WebSocket (relay+ws，带认证)"
     echo -e "  ${GREEN}3${NC}) Relay (纯转发，带认证)"
-    echo -n -e "${YELLOW}请输入 [1-3]: ${NC}"
+    echo -e "  ${GREEN}4${NC}) WebSocket Secure (wss，无认证)"
+    echo -e "  ${GREEN}5${NC}) Relay+WebSocket Secure (relay+wss，带认证)"
+    echo -n -e "${YELLOW}请输入 [1-5]: ${NC}"
     read remote_proto_choice
     case $remote_proto_choice in
         1) remote_proto="ws"; need_remote_auth_hint=0 ;;
         2) remote_proto="relay+ws"; need_remote_auth_hint=1 ;;
         3) remote_proto="relay"; need_remote_auth_hint=1 ;;
+        4) remote_proto="wss"; need_remote_auth_hint=0 ;;
+        5) remote_proto="relay+wss"; need_remote_auth_hint=1 ;;
         *) echo -e "${RED}无效选择，默认使用 ws${NC}"; remote_proto="ws"; need_remote_auth_hint=0 ;;
     esac
     
     echo -n -e "${YELLOW}请输入远程服务器地址 (IP或域名): ${NC}"
     read raw_host
-    # 去除所有空格（关键修复）
-    raw_host=$(echo "$raw_host" | tr -d ' ')
-    # 不再进行协议智能转换，原样使用用户输入的地址
+    raw_host=$(echo "$raw_host" | tr -d ' ')  # 去除空格
     remote_host="$raw_host"
     remote_port=""
-    # 如果用户输入中包含端口（格式 host:port），则自动拆分
     if [[ "$raw_host" =~ :[0-9]+$ ]]; then
         remote_host="${raw_host%:*}"
         remote_port="${raw_host##*:}"
     fi
     if [ -z "$remote_port" ]; then
-        echo -n -e "${YELLOW}请输入远程端口: ${NC}"
-        read remote_port
-        if [[ -z "$remote_port" ]]; then
-            echo -e "${RED}端口不能为空${NC}"
-            return 1
+        # 如果协议是 wss 或 relay+wss，建议默认端口 443
+        if [ "$remote_proto" = "wss" ] || [ "$remote_proto" = "relay+wss" ]; then
+            echo -n -e "${YELLOW}请输入远程端口 (默认 443): ${NC}"
+            read remote_port
+            remote_port="${remote_port:-443}"
+        else
+            echo -n -e "${YELLOW}请输入远程端口: ${NC}"
+            read remote_port
         fi
+        if [[ -z "$remote_port" ]]; then echo -e "${RED}端口不能为空${NC}"; return 1; fi
     fi
-    if [[ -z "$remote_host" ]]; then
-        echo -e "${RED}地址不能为空${NC}"
-        return 1
-    fi
+    if [[ -z "$remote_host" ]]; then echo -e "${RED}地址不能为空${NC}"; return 1; fi
     
-    # 远程路径（仅 ws 和 relay+ws）
+    # 远程路径（仅 ws/relay+ws/wss/relay+wss 支持）
     local remote_path=""
-    if [ "$remote_proto" = "ws" ] || [ "$remote_proto" = "relay+ws" ]; then
+    if [[ "$remote_proto" =~ ^(ws|relay\+ws|wss|relay\+wss)$ ]]; then
         echo -n -e "${YELLOW}是否设置远程 WebSocket 路径？[y/N]: ${NC}"
         read set_remote_path
         if [[ "$set_remote_path" =~ ^[Yy]$ ]]; then
             echo -n -e "${YELLOW}请输入路径 (默认 /ws): ${NC}"
             read input_path
-            if [ -n "$input_path" ]; then
-                remote_path="$input_path"
-            else
-                remote_path="/ws"
-            fi
+            remote_path="${input_path:-/ws}"
         fi
     fi
     
-    # 构建转发地址（不进行协议转换，直接使用 remote_proto）
+    # 构建转发地址
     remote_addr="${remote_proto}://${remote_host}:${remote_port}"
-    if [ -n "$remote_path" ]; then
-        remote_addr="${remote_addr}?path=${remote_path}"
-    fi
+    [ -n "$remote_path" ] && remote_addr="${remote_addr}?path=${remote_path}"
     
     if [ $need_remote_auth_hint -eq 1 ]; then
         echo -e "${BLUE}远程协议 ${remote_proto} 需要认证${NC}"
-        echo -n -e "${YELLOW}远程认证用户名: ${NC}"
-        read remote_user
-        echo -n -e "${YELLOW}远程认证密码: ${NC}"
-        read -s remote_pass
-        echo
+        echo -n -e "${YELLOW}远程认证用户名: ${NC}"; read remote_user
+        echo -n -e "${YELLOW}远程认证密码: ${NC}"; read -s remote_pass; echo
         remote_addr="${remote_proto}://${remote_user}:${remote_pass}@${remote_host}:${remote_port}"
-        if [ -n "$remote_path" ]; then
-            remote_addr="${remote_addr}?path=${remote_path}"
-        fi
+        [ -n "$remote_path" ] && remote_addr="${remote_addr}?path=${remote_path}"
     fi
     
     echo -e "${GREEN}最终转发地址: ${remote_addr}${NC}"
@@ -717,17 +584,12 @@ configure_proxy() {
         2) configure_client ;;
         *) echo -e "${RED}无效选择${NC}"; return 1 ;;
     esac
-    
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
-    if [[ "$auto_start" =~ ^[Yy]$ ]]; then
-        enable_autostart
-    fi
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
+    [[ "$auto_start" =~ ^[Yy]$ ]] && enable_autostart
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1
 }
 
-# 显示状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
@@ -746,11 +608,9 @@ show_status() {
         echo -e "${RED}GOST 状态: 未安装${NC}"
     fi
     echo -e "${BLUE}========================================${NC}"
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1
 }
 
-# 查看节点信息
 show_sub() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          节点信息${NC}"
@@ -761,11 +621,9 @@ show_sub() {
         echo -e "${RED}暂无节点信息，请先配置代理。${NC}"
     fi
     echo -e "${BLUE}========================================${NC}"
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1
 }
 
-# 更新脚本（增加快速命令提示）
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -781,8 +639,7 @@ update_script() {
             echo -e "${GREEN}✓ 脚本更新成功！${NC}"
             echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
             echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
-            echo -n -e "${GREEN}按任意键退出...${NC}"
-            read -n 1
+            echo -n -e "${GREEN}按任意键退出...${NC}"; read -n 1
             exit 0
         else
             echo -e "${RED}下载的文件为空，更新失败${NC}"
@@ -790,11 +647,9 @@ update_script() {
     else
         echo -e "${RED}下载失败，请检查网络连接${NC}"
     fi
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1
 }
 
-# 主菜单
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -811,22 +666,16 @@ show_menu() {
     echo -n -e "${YELLOW}请输入 [0-6]: ${NC}"
 }
 
-# 主程序
 main() {
     detect_os_arch
     while true; do
         show_menu
         read choice
         case $choice in
-            1) if select_version_to_install; then
-                   if [ -f "$GOST_BIN" ]; then
-                       echo
-                       echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
-                       read config_now
-                       if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
-                           configure_proxy
-                       fi
-                   fi
+            1) if select_version_to_install && [ -f "$GOST_BIN" ]; then
+                   echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
+                   read config_now
+                   [[ -z "$config_now" || "$config_now" =~ ^[Yy]$ ]] && configure_proxy
                fi ;;
             2) configure_proxy ;;
             3) show_status ;;
