@@ -9,7 +9,6 @@ NC='\033[0m'
 
 SUBFILE="$HOME/sub.txt"
 
-# 获取本机 IP
 get_local_ip() {
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
     if [ -z "$ip" ]; then
@@ -21,7 +20,6 @@ get_local_ip() {
     echo "$ip"
 }
 
-# 工作目录设置
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -52,7 +50,6 @@ setup_workspace() {
 }
 setup_workspace
 
-# 检测系统和架构
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -75,7 +72,7 @@ get_gost_version() {
         return
     fi
     local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    [ -z "$ver" ] && echo "0.0.0" || echo "$ver"
+    echo "${ver:-0.0.0}"
 }
 
 version_ge() {
@@ -92,7 +89,6 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 v2
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -159,7 +155,6 @@ install_gost_v2() {
     fi
 }
 
-# 安装 v3
 install_gost_v3() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -267,45 +262,6 @@ save_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 测试代理连接
-test_proxy_connection() {
-    local proto=$1
-    local port=$2
-    local auth=$3
-    echo -e "${BLUE}正在测试代理连接...${NC}"
-    sleep 2
-    local test_url="https://ip.sb"
-    local curl_cmd="curl -s --connect-timeout 10 --max-time 15"
-    case $proto in
-        http)
-            if [ -n "$auth" ]; then
-                curl_cmd="$curl_cmd --proxy http://$auth@127.0.0.1:$port"
-            else
-                curl_cmd="$curl_cmd --proxy http://127.0.0.1:$port"
-            fi
-            ;;
-        socks5)
-            if [ -n "$auth" ]; then
-                curl_cmd="$curl_cmd --socks5 127.0.0.1:$port --proxy-user $auth"
-            else
-                curl_cmd="$curl_cmd --socks5 127.0.0.1:$port"
-            fi
-            ;;
-        *)
-            echo -e "${YELLOW}不支持自动测试该协议${NC}"
-            return
-            ;;
-    esac
-    echo -e "${YELLOW}测试请求中...${NC}"
-    local result=$($curl_cmd "$test_url" 2>/dev/null)
-    if [ -n "$result" ]; then
-        echo -e "${GREEN}✓ 代理工作正常，出口 IP: ${result}${NC}"
-    else
-        echo -e "${RED}✗ 代理连接测试失败，请检查日志: ${GOST_LOG}${NC}"
-    fi
-}
-
-# 启动代理（支持服务端和客户端，支持路径）
 start_gost() {
     local mode=$1 port=$2 proto=$3 auth1=$4 auth2=$5 forward=$6 ws_path=$7
     cd "$GOST_DIR" || return 1
@@ -354,14 +310,15 @@ start_gost() {
         save_node_info "$proxy_url"
         [ -n "$proxy_url_extra" ] && proxy_url="$proxy_url_extra"
     else
+        # 客户端模式：监听地址固定为 0.0.0.0
         local local_proto="$proto"
         local local_auth="$auth1"
         local forward_addr="$forward"
         if [ -n "$local_auth" ]; then
-            cmd="$GOST_BIN -L ${local_proto}://${local_auth}@:${port} -F ${forward_addr}"
+            cmd="$GOST_BIN -L ${local_proto}://${local_auth}@0.0.0.0:${port} -F ${forward_addr}"
             proxy_url="${local_proto}://${local_auth}@${ip}:${port} -> ${forward_addr}"
         else
-            cmd="$GOST_BIN -L ${local_proto}://:${port} -F ${forward_addr}"
+            cmd="$GOST_BIN -L ${local_proto}://0.0.0.0:${port} -F ${forward_addr}"
             proxy_url="${local_proto}://${ip}:${port} -> ${forward_addr}"
         fi
         echo -e "${GREEN}启动客户端链式代理 (${local_proto} -> ${forward_addr})${NC}"
@@ -418,7 +375,6 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置服务端
 configure_server() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置服务端（本地代理）${NC}"
@@ -426,11 +382,8 @@ configure_server() {
     while true; do
         echo -n -e "${YELLOW}请输入监听端口: ${NC}"
         read port
-        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-            break
-        else
-            echo -e "${RED}端口无效${NC}"
-        fi
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then break
+        else echo -e "${RED}端口无效${NC}"; fi
     done
     echo -e "${BLUE}请选择协议:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
@@ -509,7 +462,6 @@ configure_server() {
     fi
 }
 
-# 客户端配置（支持 wss 和 relay+wss）
 configure_client() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置客户端（链式代理）${NC}"
@@ -557,7 +509,7 @@ configure_client() {
     
     echo -n -e "${YELLOW}请输入远程服务器地址 (IP或域名): ${NC}"
     read raw_host
-    raw_host=$(echo "$raw_host" | tr -d ' ')  # 去除空格
+    raw_host=$(echo "$raw_host" | tr -d ' ')
     remote_host="$raw_host"
     remote_port=""
     if [[ "$raw_host" =~ :[0-9]+$ ]]; then
@@ -577,7 +529,6 @@ configure_client() {
     fi
     if [[ -z "$remote_host" ]]; then echo -e "${RED}地址不能为空${NC}"; return 1; fi
     
-    # 远程路径
     local remote_path=""
     if [[ "$remote_proto" =~ ^(ws|relay\+ws|wss|relay\+wss)$ ]]; then
         echo -n -e "${YELLOW}是否设置远程 WebSocket 路径？[y/N]: ${NC}"
@@ -589,7 +540,6 @@ configure_client() {
         fi
     fi
     
-    # 构建转发地址
     remote_addr="${remote_proto}://${remote_host}:${remote_port}"
     [ -n "$remote_path" ] && remote_addr="${remote_addr}?path=${remote_path}"
     
@@ -603,20 +553,8 @@ configure_client() {
     
     echo -e "${GREEN}最终转发地址: ${remote_addr}${NC}"
     start_gost "client" "$port" "$local_proto" "$auth_str" "" "$remote_addr"
-    
-    # 测试连接（仅当本地协议为 http 或 socks5 时）
-    if [[ "$local_proto" == "http" || "$local_proto" == "socks5" ]]; then
-        echo -n -e "${YELLOW}是否测试代理连接？[y/N]: ${NC}"
-        read test_choice
-        if [[ "$test_choice" =~ ^[Yy]$ ]]; then
-            test_proxy_connection "$local_proto" "$port" "$auth_str"
-        fi
-    else
-        echo -e "${YELLOW}当前协议不支持自动测试，请手动验证。${NC}"
-    fi
 }
 
-# 统一配置入口
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
         echo -e "${RED}请先安装 GOST${NC}"
