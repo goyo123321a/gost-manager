@@ -69,21 +69,28 @@ detect_os_arch() {
     esac
 }
 
-# 获取 GOST 版本号
+# 获取 GOST 版本号（用于兼容性检查）
 get_gost_version() {
     if [ ! -f "$GOST_BIN" ]; then
         echo "0.0.0"
         return
     fi
     local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    [ -z "$ver" ] && echo "0.0.0" || echo "$ver"
+    if [ -z "$ver" ]; then
+        echo "0.0.0"
+    else
+        echo "$ver"
+    fi
 }
 
+# 版本比较函数
 version_ge() {
-    local v1=$1 v2=$2
+    local v1=$1
+    local v2=$2
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
+# 版本比较：是否 >= 2.12（新格式从此版本开始）
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -93,7 +100,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 v2
+# 安装 v2（兼容新旧格式）
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -113,6 +120,7 @@ install_gost_v2() {
         fi
     fi
 
+    # 旧格式 .gz（多种备选URL）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
@@ -121,10 +129,21 @@ install_gost_v2() {
         )
         if [[ "$os" == "linux" ]]; then
             case "$cpu_arch" in
-                amd64) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-amd64-${version}.gz") ;;
-                arm64) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz" "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz") ;;
-                armv7) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv7-${version}.gz") ;;
-                386)   gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-386-${version}.gz") ;;
+                amd64)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-amd64-${version}.gz")
+                    ;;
+                arm64)
+                    gz_urls+=(
+                        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz"
+                        "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz"
+                    )
+                    ;;
+                armv7)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv7-${version}.gz")
+                    ;;
+                386)
+                    gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-386-${version}.gz")
+                    ;;
             esac
         elif [[ "$os" == "freebsd" ]]; then
             gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-freebsd-${cpu_arch}-${version}.gz")
@@ -183,6 +202,7 @@ install_gost_v3() {
     return 1
 }
 
+# 获取 v2 版本列表（默认选择第一个）
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
@@ -193,47 +213,74 @@ get_v2_versions() {
     local version_array=($versions)
     local version_count=${#version_array[@]}
     echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
-    for i in "${!version_array[@]}"; do echo "  $((i+1))) ${version_array[$i]}"; done
+    for i in "${!version_array[@]}"; do
+        echo "  $((i+1))) ${version_array[$i]}"
+    done
     echo "  $((version_count+1))) 返回上级"
     echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
     read choice
-    [[ -z "$choice" ]] && choice=1
-    if [[ "$choice" -eq $((version_count+1)) ]]; then return 1
-    elif [[ "$choice" -ge 1 && "$choice" -le "$version_count" ]]; then
-        install_gost_v2 "${version_array[$((choice-1))]}"
+    if [[ -z "$choice" ]]; then
+        choice=1
+    fi
+    if [[ "$choice" -eq $((version_count+1)) ]]; then
+        return 1
+    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
+        local selected_version="${version_array[$((choice-1))]}"
+        install_gost_v2 "$selected_version"
         return $?
-    else echo -e "${RED}无效选择${NC}"; return 1; fi
+    else
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
 }
 
+# 获取 v3 版本列表（过滤预发布版本，默认选择第一个稳定版）
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
     local versions=""
     if [[ -z "$all_versions" ]]; then
+        # 备用列表只包含稳定版
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2 v3.2.1 v3.2.0"
     else
+        # 过滤掉包含 nightly, rc, alpha, beta 的预发布版本
         versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
     fi
+    
     local version_array=($versions)
     local version_count=${#version_array[@]}
+    
     if [ $version_count -eq 0 ]; then
         echo -e "${RED}未找到稳定版本，使用备用列表${NC}"
         version_array=(v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2)
         version_count=${#version_array[@]}
     fi
+    
     echo -e "${GREEN}可用的 GOST v3 稳定版本:${NC}"
-    for i in "${!version_array[@]}"; do echo "  $((i+1))) ${version_array[$i]}"; done
+    for i in "${!version_array[@]}"; do
+        echo "  $((i+1))) ${version_array[$i]}"
+    done
     echo "  $((version_count+1))) 返回上级"
+    
     echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
     read choice
-    [[ -z "$choice" ]] && choice=1
-    if [[ "$choice" -eq $((version_count+1)) ]]; then return 1
-    elif [[ "$choice" -ge 1 && "$choice" -le "$version_count" ]]; then
-        install_gost_v3 "${version_array[$((choice-1))]}"
+    if [[ -z "$choice" ]]; then
+        choice=1
+    fi
+    
+    if [[ "$choice" -eq $((version_count+1)) ]]; then
+        return 1
+    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
+        local selected_version="${version_array[$((choice-1))]}"
+        install_gost_v3 "$selected_version"
         return $?
-    else echo -e "${RED}无效选择${NC}"; return 1; fi
+    else
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
 }
 
+# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
@@ -252,69 +299,88 @@ select_version_to_install() {
     esac
 }
 
-# 停止 GOST
+# 停止 GOST（清理进程和 PID 文件）
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
+        echo -e "${YELLOW}正在停止 GOST 进程...${NC}"
         pkill -f "$GOST_BIN" 2>/dev/null
         sleep 1
-        echo -e "${GREEN}✓ 已停止${NC}"
+        # 再次检查是否还有残留进程
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            echo -e "${RED}强制停止...${NC}"
+            pkill -9 -f "$GOST_BIN" 2>/dev/null
+        fi
+        echo -e "${GREEN}✓ GOST 进程已停止${NC}"
     else
-        echo -e "${YELLOW}没有找到正在运行的 GOST 进程${NC}"
+        echo -e "${YELLOW}没有找到运行中的 GOST 进程${NC}"
     fi
+    # 删除 PID 文件
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
+    # 可选：删除保活脚本生成的 start_cmd.txt 记录，避免下次自启重新拉起
+    # 但为了保留配置，不删除 start_cmd.txt，用户如果愿意可以手动清理
 }
 
+# 保存节点信息到文件
 save_node_info() {
     local info="$1"
     echo "$info" > "$SUBFILE"
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 启动代理（仅服务端）
+# 启动代理（Shadowsocks 增加 Base64 输出，并保存节点信息，支持节点名称）
 start_gost() {
     local protocol=$1
     local port=$2
     local auth1=$3
     local auth2=$4
+    local name=$5   # 节点名称参数，仅 Shadowsocks 使用
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
     local proxy_url=""
+    local proxy_url_extra=""
     local ip=$(get_local_ip)
-
     case $protocol in
         1)
             cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
             proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 HTTP 代理...${NC}"
+            save_node_info "$proxy_url"
             ;;
         2)
             cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
             proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
+            save_node_info "$proxy_url"
             ;;
         3)
             cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
             proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
             echo -e "${GREEN}启动自适应代理...${NC}"
+            save_node_info "$proxy_url"
             ;;
         4)
             cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
             ss_link="${auth1}:${auth2}@${ip}:${port}"
+            # 生成 Base64 编码（兼容 Linux 和 macOS）
             if command -v base64 >/dev/null 2>&1; then
                 ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
             else
                 ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
             fi
-            proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
-            proxy_url_extra="ss://${ss_base64}"
+            # 构造带名称的链接
+            if [ -n "$name" ]; then
+                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${name}"
+                proxy_url_extra="ss://${ss_base64}#${name}"
+            else
+                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
+                proxy_url_extra="ss://${ss_base64}"
+            fi
             echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
+            # 保存节点信息（同时保存原始和带名称的Base64）
+            save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
             ;;
     esac
-    save_node_info "$proxy_url"
-    [ -n "$proxy_url_extra" ] && proxy_url="$proxy_url_extra"
-
     nohup $cmd > "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
@@ -324,7 +390,10 @@ start_gost() {
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${GREEN}代理链接:${NC}"
         echo -e "${YELLOW}${proxy_url}${NC}"
-        [ -n "$proxy_url_extra" ] && echo -e "${GREEN}Base64 编码:${NC}\n${YELLOW}${proxy_url_extra}${NC}"
+        if [ -n "$proxy_url_extra" ]; then
+            echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
+            echo -e "${YELLOW}${proxy_url_extra}${NC}"
+        fi
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         return 0
     else
@@ -333,6 +402,7 @@ start_gost() {
     fi
 }
 
+# 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -352,11 +422,14 @@ fi
 EOF
     chmod +x "$GOST_DIR/keepalive.sh"
     local running_cmd=$(ps -ef | grep "$GOST_BIN" | grep -v grep | head -1 | sed 's/.*\.\/gost/\.\/gost/')
-    [ -n "$running_cmd" ] && echo "$running_cmd" > "$GOST_DIR/start_cmd.txt"
+    if [ -n "$running_cmd" ]; then
+        echo "$running_cmd" > "$GOST_DIR/start_cmd.txt"
+    fi
     (echo "$current_cron"; echo "@reboot $GOST_DIR/keepalive.sh"; echo "*/5 * * * * $GOST_DIR/keepalive.sh") | crontab -
     echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
+# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}正在卸载 GOST...${NC}"
     stop_gost
@@ -365,8 +438,8 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置代理（仅服务端）
-configure_server() {
+# 配置代理流程
+configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
         echo -e "${RED}请先安装 GOST${NC}"
         return 1
@@ -395,18 +468,23 @@ configure_server() {
     local username="admin"
     local password="123456"
     local method="aes-256-gcm"
+    local node_name=""
 
     if [ "$protocol" -eq 4 ]; then
         echo -e "${BLUE}Shadowsocks 配置${NC}"
+        
         local gost_ver=$(get_gost_version)
         local ss_methods=()
         local ss_method_names=()
+        
         if version_ge "$gost_ver" "2.8.0"; then
             if version_ge "$gost_ver" "3.1.0"; then
+                # v3.1.0+ 仅支持 AEAD
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
                 ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
                 echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
             else
+                # v2.8.0 - v3.0.x 支持全部
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
                 ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
                 echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
@@ -417,12 +495,17 @@ configure_server() {
             read -n 1
             return 1
         fi
+        
         echo -e "${YELLOW}请选择加密方式:${NC}"
-        for i in "${!ss_method_names[@]}"; do echo "  $((i+1))) ${ss_method_names[$i]}"; done
+        for i in "${!ss_method_names[@]}"; do
+            echo "  $((i+1))) ${ss_method_names[$i]}"
+        done
         echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}] (默认 1): ${NC}"
         read method_choice
-        method_choice="${method_choice:-1}"
-        if [[ "$method_choice" -ge 1 && "$method_choice" -le ${#ss_methods[@]} ]]; then
+        if [[ -z "$method_choice" ]]; then
+            method_choice=1
+        fi
+        if [[ "$method_choice" -ge 1 ]] && [[ "$method_choice" -le ${#ss_methods[@]} ]]; then
             method="${ss_methods[$((method_choice-1))]}"
         else
             echo -e "${RED}无效选择，使用默认 aes-256-gcm${NC}"
@@ -432,7 +515,18 @@ configure_server() {
         echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
+        # 输入节点名称
+        echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
+        read input_name
+        if [ -n "$input_name" ]; then
+            node_name="$input_name"
+        else
+            node_name="GOST-SS"
+        fi
+        # 调用启动函数（Shadowsocks）
+        start_gost "$protocol" "$port" "$method" "$password" "$node_name"
     else
+        # HTTP / SOCKS5 / 自适应
         echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
         echo -n -e "${YELLOW}账号 [admin]: ${NC}"
         read input_user
@@ -440,9 +534,10 @@ configure_server() {
         echo -n -e "${YELLOW}密码 [123456]: ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
+        # 调用启动函数（非 Shadowsocks）
+        start_gost "$protocol" "$port" "$username" "$password"
     fi
 
-    start_gost "$protocol" "$port" "${method:-$username}" "$password"
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
@@ -452,6 +547,7 @@ configure_server() {
     read -n 1
 }
 
+# 显示状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
@@ -474,6 +570,7 @@ show_status() {
     read -n 1
 }
 
+# 查看节点信息
 show_sub() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          节点信息${NC}"
@@ -488,6 +585,7 @@ show_sub() {
     read -n 1
 }
 
+# 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -516,15 +614,7 @@ update_script() {
     read -n 1
 }
 
-menu_stop_service() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}          停止 GOST 服务${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    stop_gost
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
-}
-
+# 主菜单
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -536,29 +626,35 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}6${BLUE}) 查看节点信息                   ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}7${BLUE}) 停止 GOST 服务                 ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}7${BLUE}) 停止 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
     echo -n -e "${YELLOW}请输入 [0-7]: ${NC}"
 }
 
+# 主程序
 main() {
     detect_os_arch
     while true; do
         show_menu
         read choice
         case $choice in
-            1) if select_version_to_install && [ -f "$GOST_BIN" ]; then
-                   echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
-                   read config_now
-                   [[ -z "$config_now" || "$config_now" =~ ^[Yy]$ ]] && configure_server
+            1) if select_version_to_install; then
+                   if [ -f "$GOST_BIN" ]; then
+                       echo
+                       echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
+                       read config_now
+                       if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
+                           configure_proxy
+                       fi
+                   fi
                fi ;;
-            2) configure_server ;;
+            2) configure_proxy ;;
             3) show_status ;;
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             5) update_script ;;
             6) show_sub ;;
-            7) menu_stop_service ;;
+            7) stop_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
         esac
