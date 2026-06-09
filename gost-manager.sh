@@ -69,25 +69,65 @@ detect_os_arch() {
     esac
 }
 
-# 获取 GOST 版本号（用于兼容性检查）
-get_gost_version() {
-    if [ ! -f "$GOST_BIN" ]; then
-        echo "0.0.0"
-        return
-    fi
-    local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    if [ -z "$ver" ]; then
-        echo "0.0.0"
+# 获取已安装的 GOST 版本（如果存在）
+get_installed_gost_version() {
+    if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
+        local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        if [ -n "$ver" ]; then
+            echo "$ver"
+        else
+            echo "未知版本"
+        fi
     else
-        echo "$ver"
+        echo "未安装"
     fi
 }
 
-# 版本比较函数
-version_ge() {
-    local v1=$1
-    local v2=$2
-    [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
+# 检查是否有运行中的 GOST 进程，并显示版本信息
+check_running_gost() {
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        local installed_ver=$(get_installed_gost_version)
+        echo -e "${YELLOW}检测到正在运行的 GOST 进程${NC}"
+        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            local pid=$(pgrep -f "$GOST_BIN" | head -1)
+            echo -e "${GREEN}运行中进程 PID: ${pid}${NC}"
+        fi
+        echo -n -e "${YELLOW}是否停止当前进程并继续安装新版本？[y/N]: ${NC}"
+        read ans
+        if [[ "$ans" =~ ^[Yy]$ ]]; then
+            stop_gost
+            return 0
+        else
+            echo -e "${RED}取消安装。${NC}"
+            return 1
+        fi
+    else
+        # 没有运行进程，显示已安装版本信息（如果有）
+        local installed_ver=$(get_installed_gost_version)
+        if [ "$installed_ver" != "未安装" ]; then
+            echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+            echo -e "${YELLOW}没有运行中的 GOST 进程，可以直接覆盖安装。${NC}"
+        fi
+        return 0
+    fi
+}
+
+# 停止 GOST（清理进程和 PID 文件）
+stop_gost() {
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        echo -e "${YELLOW}正在停止 GOST 进程...${NC}"
+        pkill -f "$GOST_BIN" 2>/dev/null
+        sleep 1
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            echo -e "${RED}强制停止...${NC}"
+            pkill -9 -f "$GOST_BIN" 2>/dev/null
+        fi
+        echo -e "${GREEN}✓ GOST 进程已停止${NC}"
+    else
+        echo -e "${YELLOW}没有找到运行中的 GOST 进程${NC}"
+    fi
+    [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
 # 版本比较：是否 >= 2.12（新格式从此版本开始）
@@ -103,6 +143,10 @@ version_ge_2_12() {
 # 安装 v2（兼容新旧格式）
 install_gost_v2() {
     local version=$1
+    # 检查并处理运行中的进程
+    if ! check_running_gost; then
+        return 1
+    fi
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     cd "$GOST_DIR" || return 1
@@ -183,9 +227,13 @@ install_gost_v2() {
     fi
 }
 
-# 安装 v3（失败处理与 v2 保持一致）
+# 安装 v3
 install_gost_v3() {
     local version=$1
+    # 检查并处理运行中的进程
+    if ! check_running_gost; then
+        return 1
+    fi
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
     cd "$GOST_DIR" || return 1
@@ -246,10 +294,8 @@ get_v3_versions() {
     local all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
     local versions=""
     if [[ -z "$all_versions" ]]; then
-        # 备用列表只包含稳定版
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2 v3.2.1 v3.2.0"
     else
-        # 过滤掉包含 nightly, rc, alpha, beta 的预发布版本
         versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
     fi
     
@@ -303,23 +349,6 @@ select_version_to_install() {
         0) return 1 ;;
         *) echo -e "${RED}无效选择${NC}"; return 1 ;;
     esac
-}
-
-# 停止 GOST（清理进程和 PID 文件）
-stop_gost() {
-    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        echo -e "${YELLOW}正在停止 GOST 进程...${NC}"
-        pkill -f "$GOST_BIN" 2>/dev/null
-        sleep 1
-        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-            echo -e "${RED}强制停止...${NC}"
-            pkill -9 -f "$GOST_BIN" 2>/dev/null
-        fi
-        echo -e "${GREEN}✓ GOST 进程已停止${NC}"
-    else
-        echo -e "${YELLOW}没有找到运行中的 GOST 进程${NC}"
-    fi
-    [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
 # 保存节点信息到文件
@@ -435,6 +464,27 @@ uninstall_gost() {
     crontab -l 2>/dev/null | grep -v "$GOST_DIR" | crontab -
     rm -rf "$GOST_DIR"
     echo -e "${GREEN}✓ 卸载完成${NC}"
+}
+
+# 获取 GOST 版本号（用于兼容性检查）
+get_gost_version() {
+    if [ ! -f "$GOST_BIN" ]; then
+        echo "0.0.0"
+        return
+    fi
+    local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ -z "$ver" ]; then
+        echo "0.0.0"
+    else
+        echo "$ver"
+    fi
+}
+
+# 版本比较函数
+version_ge() {
+    local v1=$1
+    local v2=$2
+    [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
 # 配置代理流程
