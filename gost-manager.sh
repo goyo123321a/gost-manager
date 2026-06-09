@@ -21,7 +21,7 @@ get_local_ip() {
     echo "$ip"
 }
 
-# 工作目录设置
+# 工作目录设置（自动适配 root/普通用户）
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -52,6 +52,7 @@ setup_workspace() {
 }
 setup_workspace
 
+# 检测系统和架构
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -68,6 +69,7 @@ detect_os_arch() {
     esac
 }
 
+# 获取 GOST 版本号（用于兼容性检查）
 get_gost_version() {
     if [ ! -f "$GOST_BIN" ]; then
         echo "0.0.0"
@@ -77,11 +79,13 @@ get_gost_version() {
     [ -z "$ver" ] && echo "0.0.0" || echo "$ver"
 }
 
+# 版本比较函数
 version_ge() {
     local v1=$1 v2=$2
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
+# 版本比较：是否 >= 2.12（新格式从此版本开始）
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -250,12 +254,15 @@ select_version_to_install() {
     esac
 }
 
+# 停止 GOST（可被其他函数调用，也可直接作为菜单选项）
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
         echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
         pkill -f "$GOST_BIN" 2>/dev/null
         sleep 1
         echo -e "${GREEN}✓ 已停止${NC}"
+    else
+        echo -e "${YELLOW}没有找到正在运行的 GOST 进程${NC}"
     fi
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
@@ -378,7 +385,6 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置服务端（省略，与之前相同，保持完整）
 configure_server() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置服务端（本地代理）${NC}"
@@ -469,7 +475,6 @@ configure_server() {
     fi
 }
 
-# 客户端配置（支持 wss 和 relay+wss）
 configure_client() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置客户端（链式代理）${NC}"
@@ -538,7 +543,6 @@ configure_client() {
     fi
     if [[ -z "$remote_host" ]]; then echo -e "${RED}地址不能为空${NC}"; return 1; fi
     
-    # 远程路径（仅 ws/relay+ws/wss/relay+wss 支持）
     local remote_path=""
     if [[ "$remote_proto" =~ ^(ws|relay\+ws|wss|relay\+wss)$ ]]; then
         echo -n -e "${YELLOW}是否设置远程 WebSocket 路径？[y/N]: ${NC}"
@@ -550,7 +554,6 @@ configure_client() {
         fi
     fi
     
-    # 构建转发地址
     remote_addr="${remote_proto}://${remote_host}:${remote_port}"
     [ -n "$remote_path" ] && remote_addr="${remote_addr}?path=${remote_path}"
     
@@ -566,7 +569,6 @@ configure_client() {
     start_gost "client" "$port" "$local_proto" "$auth_str" "" "$remote_addr"
 }
 
-# 统一配置入口
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
         echo -e "${RED}请先安装 GOST${NC}"
@@ -650,6 +652,16 @@ update_script() {
     echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1
 }
 
+# 新增：停止服务菜单函数
+menu_stop_service() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}          停止 GOST 服务${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    stop_gost
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
+}
+
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -661,9 +673,10 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}6${BLUE}) 查看节点信息                   ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}7${BLUE}) 停止 GOST 服务                 ║${NC}"
     echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo -n -e "${YELLOW}请输入 [0-6]: ${NC}"
+    echo -n -e "${YELLOW}请输入 [0-7]: ${NC}"
 }
 
 main() {
@@ -682,6 +695,7 @@ main() {
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             5) update_script ;;
             6) show_sub ;;
+            7) menu_stop_service ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
         esac
