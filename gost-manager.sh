@@ -9,6 +9,7 @@ NC='\033[0m'
 
 SUBFILE="$HOME/sub.txt"
 
+# 获取本机 IP
 get_local_ip() {
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
     if [ -z "$ip" ]; then
@@ -20,6 +21,7 @@ get_local_ip() {
     echo "$ip"
 }
 
+# 工作目录设置
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -72,7 +74,7 @@ get_gost_version() {
         return
     fi
     local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    echo "${ver:-0.0.0}"
+    [ -z "$ver" ] && echo "0.0.0" || echo "$ver"
 }
 
 version_ge() {
@@ -89,6 +91,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
+# 安装 v2
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -155,6 +158,7 @@ install_gost_v2() {
     fi
 }
 
+# 安装 v3
 install_gost_v3() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -310,15 +314,14 @@ start_gost() {
         save_node_info "$proxy_url"
         [ -n "$proxy_url_extra" ] && proxy_url="$proxy_url_extra"
     else
-        # 客户端模式：监听地址固定为 0.0.0.0
         local local_proto="$proto"
         local local_auth="$auth1"
         local forward_addr="$forward"
         if [ -n "$local_auth" ]; then
-            cmd="$GOST_BIN -L ${local_proto}://${local_auth}@0.0.0.0:${port} -F ${forward_addr}"
+            cmd="$GOST_BIN -L ${local_proto}://${local_auth}@:${port} -F ${forward_addr}"
             proxy_url="${local_proto}://${local_auth}@${ip}:${port} -> ${forward_addr}"
         else
-            cmd="$GOST_BIN -L ${local_proto}://0.0.0.0:${port} -F ${forward_addr}"
+            cmd="$GOST_BIN -L ${local_proto}://:${port} -F ${forward_addr}"
             proxy_url="${local_proto}://${ip}:${port} -> ${forward_addr}"
         fi
         echo -e "${GREEN}启动客户端链式代理 (${local_proto} -> ${forward_addr})${NC}"
@@ -375,6 +378,7 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
+# 配置服务端（省略，与之前相同，保持完整）
 configure_server() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置服务端（本地代理）${NC}"
@@ -382,8 +386,11 @@ configure_server() {
     while true; do
         echo -n -e "${YELLOW}请输入监听端口: ${NC}"
         read port
-        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then break
-        else echo -e "${RED}端口无效${NC}"; fi
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}端口无效${NC}"
+        fi
     done
     echo -e "${BLUE}请选择协议:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
@@ -462,6 +469,7 @@ configure_server() {
     fi
 }
 
+# 客户端配置（支持 wss 和 relay+wss）
 configure_client() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置客户端（链式代理）${NC}"
@@ -509,7 +517,7 @@ configure_client() {
     
     echo -n -e "${YELLOW}请输入远程服务器地址 (IP或域名): ${NC}"
     read raw_host
-    raw_host=$(echo "$raw_host" | tr -d ' ')
+    raw_host=$(echo "$raw_host" | tr -d ' ')  # 去除空格
     remote_host="$raw_host"
     remote_port=""
     if [[ "$raw_host" =~ :[0-9]+$ ]]; then
@@ -517,6 +525,7 @@ configure_client() {
         remote_port="${raw_host##*:}"
     fi
     if [ -z "$remote_port" ]; then
+        # 如果协议是 wss 或 relay+wss，建议默认端口 443
         if [ "$remote_proto" = "wss" ] || [ "$remote_proto" = "relay+wss" ]; then
             echo -n -e "${YELLOW}请输入远程端口 (默认 443): ${NC}"
             read remote_port
@@ -529,6 +538,7 @@ configure_client() {
     fi
     if [[ -z "$remote_host" ]]; then echo -e "${RED}地址不能为空${NC}"; return 1; fi
     
+    # 远程路径（仅 ws/relay+ws/wss/relay+wss 支持）
     local remote_path=""
     if [[ "$remote_proto" =~ ^(ws|relay\+ws|wss|relay\+wss)$ ]]; then
         echo -n -e "${YELLOW}是否设置远程 WebSocket 路径？[y/N]: ${NC}"
@@ -540,6 +550,7 @@ configure_client() {
         fi
     fi
     
+    # 构建转发地址
     remote_addr="${remote_proto}://${remote_host}:${remote_port}"
     [ -n "$remote_path" ] && remote_addr="${remote_addr}?path=${remote_path}"
     
@@ -555,6 +566,7 @@ configure_client() {
     start_gost "client" "$port" "$local_proto" "$auth_str" "" "$remote_addr"
 }
 
+# 统一配置入口
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
         echo -e "${RED}请先安装 GOST${NC}"
