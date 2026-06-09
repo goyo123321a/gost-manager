@@ -316,8 +316,6 @@ stop_gost() {
     fi
     # 删除 PID 文件
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
-    # 可选：删除保活脚本生成的 start_cmd.txt 记录，避免下次自启重新拉起
-    # 但为了保留配置，不删除 start_cmd.txt，用户如果愿意可以手动清理
 }
 
 # 保存节点信息到文件
@@ -547,9 +545,13 @@ configure_proxy() {
     read -n 1
 }
 
-# 显示状态
+# 显示状态（新增本机 IP 显示）
 show_status() {
     echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}          系统状态${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    local local_ip=$(get_local_ip)
+    echo -e "${GREEN}本机 IP: ${YELLOW}${local_ip}${NC}"
     if [ -f "$GOST_BIN" ]; then
         local version_info=$("$GOST_BIN" -V 2>&1 | head -1)
         echo -e "${GREEN}GOST 状态: 已安装${NC}"
