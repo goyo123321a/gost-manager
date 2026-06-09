@@ -21,7 +21,7 @@ get_local_ip() {
     echo "$ip"
 }
 
-# 工作目录设置
+# 工作目录设置（自动适配 root/普通用户）
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -69,6 +69,7 @@ detect_os_arch() {
     esac
 }
 
+# 获取 GOST 版本号（用于兼容性检查）
 get_gost_version() {
     if [ ! -f "$GOST_BIN" ]; then
         echo "0.0.0"
@@ -82,12 +83,14 @@ get_gost_version() {
     fi
 }
 
+# 版本比较函数
 version_ge() {
     local v1=$1
     local v2=$2
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
+# 版本比较：是否 >= 2.12（新格式从此版本开始）
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -97,7 +100,7 @@ version_ge_2_12() {
     [ "$minor" -ge 12 ]
 }
 
-# 安装 v2
+# 安装 v2（兼容新旧格式）
 install_gost_v2() {
     local version=$1
     mkdir -p "$GOST_DIR"
@@ -117,6 +120,7 @@ install_gost_v2() {
         fi
     fi
 
+    # 旧格式 .gz（多种备选URL）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
@@ -187,6 +191,7 @@ install_gost_v3() {
     return 1
 }
 
+# 获取 v2 版本列表（默认选择第一个）
 get_v2_versions() {
     echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
@@ -218,32 +223,40 @@ get_v2_versions() {
     fi
 }
 
+# 获取 v3 版本列表（过滤预发布版本，默认选择第一个稳定版）
 get_v3_versions() {
     echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
     local all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
     local versions=""
     if [[ -z "$all_versions" ]]; then
+        # 备用列表只包含稳定版
         versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2 v3.2.1 v3.2.0"
     else
+        # 过滤掉包含 nightly, rc, alpha, beta 的预发布版本
         versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
     fi
+    
     local version_array=($versions)
     local version_count=${#version_array[@]}
+    
     if [ $version_count -eq 0 ]; then
         echo -e "${RED}未找到稳定版本，使用备用列表${NC}"
         version_array=(v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2)
         version_count=${#version_array[@]}
     fi
+    
     echo -e "${GREEN}可用的 GOST v3 稳定版本:${NC}"
     for i in "${!version_array[@]}"; do
         echo "  $((i+1))) ${version_array[$i]}"
     done
     echo "  $((version_count+1))) 返回上级"
+    
     echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
     read choice
     if [[ -z "$choice" ]]; then
         choice=1
     fi
+    
     if [[ "$choice" -eq $((version_count+1)) ]]; then
         return 1
     elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
@@ -256,6 +269,7 @@ get_v3_versions() {
     fi
 }
 
+# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       选择 GOST 版本${NC}"
@@ -274,6 +288,7 @@ select_version_to_install() {
     esac
 }
 
+# 停止 GOST
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
         echo -e "${YELLOW}停止现有 GOST 进程...${NC}"
@@ -284,21 +299,22 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
+# 保存节点信息到文件
 save_node_info() {
     local info="$1"
     echo "$info" > "$SUBFILE"
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 启动代理（支持路径）
+# 启动代理（支持服务端和客户端，支持路径）
 start_gost() {
-    local mode=$1
+    local mode=$1          # server 或 client
     local port=$2
-    local proto=$3
+    local proto=$3         # 服务端：协议类型；客户端：本地协议
     local auth1=$4
     local auth2=$5
-    local forward=$6
-    local ws_path=$7   # 新增路径参数
+    local forward=$6       # 客户端转发地址
+    local ws_path=$7
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -408,6 +424,7 @@ start_gost() {
     fi
 }
 
+# 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -434,6 +451,7 @@ EOF
     echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
+# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}正在卸载 GOST...${NC}"
     stop_gost
@@ -442,7 +460,7 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置服务端
+# 配置服务端（不变）
 configure_server() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置服务端（本地代理）${NC}"
@@ -474,7 +492,6 @@ configure_server() {
     local node_name=""
     local ws_path=""
 
-    # 路径询问（仅适用于协议 5 和 6）
     if [ "$protocol" -eq 5 ] || [ "$protocol" -eq 6 ]; then
         echo -n -e "${YELLOW}是否设置 WebSocket 路径？[y/N]: ${NC}"
         read set_path
@@ -534,10 +551,8 @@ configure_server() {
         [ -n "$input_name" ] && node_name="$input_name" || node_name="GOST-SS"
         start_gost "server" "$port" "$protocol" "$method" "$password" "" "$ws_path"
     elif [ "$protocol" -eq 5 ]; then
-        # WS 无认证
         start_gost "server" "$port" "$protocol" "" "" "" "$ws_path"
     elif [ "$protocol" -eq 6 ]; then
-        # relay+ws 带认证
         echo -e "${BLUE}Relay+WebSocket 需要认证${NC}"
         echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
         read input_user
@@ -567,7 +582,7 @@ configure_server() {
     fi
 }
 
-# 配置客户端（支持路径）
+# 客户端配置（仅去除空格，无智能转换）
 configure_client() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置客户端（链式代理）${NC}"
@@ -621,15 +636,31 @@ configure_client() {
     esac
     
     echo -n -e "${YELLOW}请输入远程服务器地址 (IP或域名): ${NC}"
-    read remote_host
-    echo -n -e "${YELLOW}请输入远程端口: ${NC}"
-    read remote_port
-    if [[ -z "$remote_host" || -z "$remote_port" ]]; then
-        echo -e "${RED}地址和端口不能为空${NC}"
+    read raw_host
+    # 去除所有空格（关键修复）
+    raw_host=$(echo "$raw_host" | tr -d ' ')
+    # 不再进行协议智能转换，原样使用用户输入的地址
+    remote_host="$raw_host"
+    remote_port=""
+    # 如果用户输入中包含端口（格式 host:port），则自动拆分
+    if [[ "$raw_host" =~ :[0-9]+$ ]]; then
+        remote_host="${raw_host%:*}"
+        remote_port="${raw_host##*:}"
+    fi
+    if [ -z "$remote_port" ]; then
+        echo -n -e "${YELLOW}请输入远程端口: ${NC}"
+        read remote_port
+        if [[ -z "$remote_port" ]]; then
+            echo -e "${RED}端口不能为空${NC}"
+            return 1
+        fi
+    fi
+    if [[ -z "$remote_host" ]]; then
+        echo -e "${RED}地址不能为空${NC}"
         return 1
     fi
     
-    # 远程路径（仅 ws 和 relay+ws 支持）
+    # 远程路径（仅 ws 和 relay+ws）
     local remote_path=""
     if [ "$remote_proto" = "ws" ] || [ "$remote_proto" = "relay+ws" ]; then
         echo -n -e "${YELLOW}是否设置远程 WebSocket 路径？[y/N]: ${NC}"
@@ -645,6 +676,7 @@ configure_client() {
         fi
     fi
     
+    # 构建转发地址（不进行协议转换，直接使用 remote_proto）
     remote_addr="${remote_proto}://${remote_host}:${remote_port}"
     if [ -n "$remote_path" ]; then
         remote_addr="${remote_addr}?path=${remote_path}"
@@ -657,13 +689,13 @@ configure_client() {
         echo -n -e "${YELLOW}远程认证密码: ${NC}"
         read -s remote_pass
         echo
-        # 重新构建带认证的地址
         remote_addr="${remote_proto}://${remote_user}:${remote_pass}@${remote_host}:${remote_port}"
         if [ -n "$remote_path" ]; then
             remote_addr="${remote_addr}?path=${remote_path}"
         fi
     fi
     
+    echo -e "${GREEN}最终转发地址: ${remote_addr}${NC}"
     start_gost "client" "$port" "$local_proto" "$auth_str" "" "$remote_addr"
 }
 
@@ -695,6 +727,7 @@ configure_proxy() {
     read -n 1
 }
 
+# 显示状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     if [ -f "$GOST_BIN" ]; then
@@ -717,6 +750,7 @@ show_status() {
     read -n 1
 }
 
+# 查看节点信息
 show_sub() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          节点信息${NC}"
@@ -731,6 +765,7 @@ show_sub() {
     read -n 1
 }
 
+# 更新脚本（增加快速命令提示）
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -759,6 +794,7 @@ update_script() {
     read -n 1
 }
 
+# 主菜单
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -775,6 +811,7 @@ show_menu() {
     echo -n -e "${YELLOW}请输入 [0-6]: ${NC}"
 }
 
+# 主程序
 main() {
     detect_os_arch
     while true; do
