@@ -52,6 +52,7 @@ setup_workspace() {
 }
 setup_workspace
 
+# 检测系统和架构
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -266,6 +267,45 @@ save_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
+# 测试代理连接
+test_proxy_connection() {
+    local proto=$1
+    local port=$2
+    local auth=$3
+    echo -e "${BLUE}正在测试代理连接...${NC}"
+    sleep 2
+    local test_url="https://ip.sb"
+    local curl_cmd="curl -s --connect-timeout 10 --max-time 15"
+    case $proto in
+        http)
+            if [ -n "$auth" ]; then
+                curl_cmd="$curl_cmd --proxy http://$auth@127.0.0.1:$port"
+            else
+                curl_cmd="$curl_cmd --proxy http://127.0.0.1:$port"
+            fi
+            ;;
+        socks5)
+            if [ -n "$auth" ]; then
+                curl_cmd="$curl_cmd --socks5 127.0.0.1:$port --proxy-user $auth"
+            else
+                curl_cmd="$curl_cmd --socks5 127.0.0.1:$port"
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}不支持自动测试该协议${NC}"
+            return
+            ;;
+    esac
+    echo -e "${YELLOW}测试请求中...${NC}"
+    local result=$($curl_cmd "$test_url" 2>/dev/null)
+    if [ -n "$result" ]; then
+        echo -e "${GREEN}✓ 代理工作正常，出口 IP: ${result}${NC}"
+    else
+        echo -e "${RED}✗ 代理连接测试失败，请检查日志: ${GOST_LOG}${NC}"
+    fi
+}
+
+# 启动代理（支持服务端和客户端，支持路径）
 start_gost() {
     local mode=$1 port=$2 proto=$3 auth1=$4 auth2=$5 forward=$6 ws_path=$7
     cd "$GOST_DIR" || return 1
@@ -378,7 +418,7 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置服务端（省略，与之前相同，保持完整）
+# 配置服务端
 configure_server() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}       配置服务端（本地代理）${NC}"
@@ -525,7 +565,6 @@ configure_client() {
         remote_port="${raw_host##*:}"
     fi
     if [ -z "$remote_port" ]; then
-        # 如果协议是 wss 或 relay+wss，建议默认端口 443
         if [ "$remote_proto" = "wss" ] || [ "$remote_proto" = "relay+wss" ]; then
             echo -n -e "${YELLOW}请输入远程端口 (默认 443): ${NC}"
             read remote_port
@@ -538,7 +577,7 @@ configure_client() {
     fi
     if [[ -z "$remote_host" ]]; then echo -e "${RED}地址不能为空${NC}"; return 1; fi
     
-    # 远程路径（仅 ws/relay+ws/wss/relay+wss 支持）
+    # 远程路径
     local remote_path=""
     if [[ "$remote_proto" =~ ^(ws|relay\+ws|wss|relay\+wss)$ ]]; then
         echo -n -e "${YELLOW}是否设置远程 WebSocket 路径？[y/N]: ${NC}"
@@ -564,6 +603,17 @@ configure_client() {
     
     echo -e "${GREEN}最终转发地址: ${remote_addr}${NC}"
     start_gost "client" "$port" "$local_proto" "$auth_str" "" "$remote_addr"
+    
+    # 测试连接（仅当本地协议为 http 或 socks5 时）
+    if [[ "$local_proto" == "http" || "$local_proto" == "socks5" ]]; then
+        echo -n -e "${YELLOW}是否测试代理连接？[y/N]: ${NC}"
+        read test_choice
+        if [[ "$test_choice" =~ ^[Yy]$ ]]; then
+            test_proxy_connection "$local_proto" "$port" "$auth_str"
+        fi
+    else
+        echo -e "${YELLOW}当前协议不支持自动测试，请手动验证。${NC}"
+    fi
 }
 
 # 统一配置入口
