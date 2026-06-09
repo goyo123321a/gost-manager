@@ -317,60 +317,80 @@ save_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 启动代理（Shadowsocks 增加 Base64 输出，并保存节点信息，支持节点名称）
+# 启动代理（支持服务端和客户端链式连接）
 start_gost() {
-    local protocol=$1
+    local mode=$1          # server 或 client
     local port=$2
-    local auth1=$3
-    local auth2=$4
-    local name=$5   # 节点名称参数，仅 Shadowsocks 使用
+    local proto=$3         # 服务端：协议类型；客户端：本地协议
+    local auth1=$4
+    local auth2=$5
+    local forward=$6       # 客户端转发地址
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
     local proxy_url=""
-    local proxy_url_extra=""
     local ip=$(get_local_ip)
-    case $protocol in
-        1)
-            cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
-            proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
-            echo -e "${GREEN}启动 HTTP 代理...${NC}"
-            save_node_info "$proxy_url"
-            ;;
-        2)
-            cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
-            proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
-            echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
-            save_node_info "$proxy_url"
-            ;;
-        3)
-            cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
-            proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
-            echo -e "${GREEN}启动自适应代理...${NC}"
-            save_node_info "$proxy_url"
-            ;;
-        4)
-            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
-            ss_link="${auth1}:${auth2}@${ip}:${port}"
-            # 生成 Base64 编码（兼容 Linux 和 macOS）
-            if command -v base64 >/dev/null 2>&1; then
-                ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
-            else
-                ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
-            fi
-            # 构造带名称的链接
-            if [ -n "$name" ]; then
-                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${name}"
-                proxy_url_extra="ss://${ss_base64}#${name}"
-            else
-                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
-                proxy_url_extra="ss://${ss_base64}"
-            fi
-            echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
-            # 保存节点信息（同时保存原始和带名称的Base64）
-            save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
-            ;;
-    esac
+
+    if [ "$mode" = "server" ]; then
+        case $proto in
+            1)
+                cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
+                proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
+                echo -e "${GREEN}启动 HTTP 代理...${NC}"
+                ;;
+            2)
+                cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
+                proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
+                echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
+                ;;
+            3)
+                cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
+                proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
+                echo -e "${GREEN}启动自适应代理...${NC}"
+                ;;
+            4)
+                cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+                ss_link="${auth1}:${auth2}@${ip}:${port}"
+                if command -v base64 >/dev/null 2>&1; then
+                    ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
+                else
+                    ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
+                fi
+                if [ -n "$auth2" ]; then
+                    proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${auth2}"
+                    proxy_url_extra="ss://${ss_base64}#${auth2}"
+                else
+                    proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
+                    proxy_url_extra="ss://${ss_base64}"
+                fi
+                echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
+                ;;
+            5)
+                cmd="$GOST_BIN -L ws://:${port}"
+                proxy_url="ws://${ip}:${port}"
+                echo -e "${GREEN}启动 WebSocket 代理...${NC}"
+                ;;
+        esac
+        save_node_info "$proxy_url"
+        if [ -n "$proxy_url_extra" ]; then
+            proxy_url="$proxy_url_extra"
+        fi
+    else
+        # 客户端模式
+        local local_proto="$proto"
+        local local_auth="$auth1"
+        local forward_addr="$forward"
+        if [ -n "$local_auth" ]; then
+            cmd="$GOST_BIN -L ${local_proto}://${local_auth}@:${port} -F ${forward_addr}"
+            proxy_url="${local_proto}://${local_auth}@${ip}:${port} -> ${forward_addr}"
+        else
+            cmd="$GOST_BIN -L ${local_proto}://:${port} -F ${forward_addr}"
+            proxy_url="${local_proto}://${ip}:${port} -> ${forward_addr}"
+        fi
+        echo -e "${GREEN}启动客户端链式代理 (${local_proto} -> ${forward_addr})${NC}"
+        save_node_info "$proxy_url"
+    fi
+
     nohup $cmd > "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
@@ -428,17 +448,13 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# 配置代理流程
-configure_proxy() {
-    if [ ! -f "$GOST_BIN" ]; then
-        echo -e "${RED}请先安装 GOST${NC}"
-        return 1
-    fi
+# 配置服务端（本地监听代理）
+configure_server() {
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}          配置代理${NC}"
+    echo -e "${GREEN}       配置服务端（本地代理）${NC}"
     echo -e "${BLUE}========================================${NC}"
     while true; do
-        echo -n -e "${YELLOW}请输入端口: ${NC}"
+        echo -n -e "${YELLOW}请输入监听端口: ${NC}"
         read port
         if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
             break
@@ -451,9 +467,10 @@ configure_proxy() {
     echo -e "  ${GREEN}2${NC}) SOCKS5"
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
     echo -e "  ${GREEN}4${NC}) Shadowsocks"
-    echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
+    echo -e "  ${GREEN}5${NC}) WebSocket (WS)"
+    echo -n -e "${YELLOW}请输入 [1-5]: ${NC}"
     read protocol
-    [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
+    [[ ! "$protocol" =~ ^[1-5]$ ]] && protocol=3
 
     local username="admin"
     local password="123456"
@@ -462,19 +479,16 @@ configure_proxy() {
 
     if [ "$protocol" -eq 4 ]; then
         echo -e "${BLUE}Shadowsocks 配置${NC}"
-        
         local gost_ver=$(get_gost_version)
         local ss_methods=()
         local ss_method_names=()
         
         if version_ge "$gost_ver" "2.8.0"; then
             if version_ge "$gost_ver" "3.1.0"; then
-                # v3.1.0+ 仅支持 AEAD
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
                 ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
                 echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
             else
-                # v2.8.0 - v3.0.x 支持全部
                 ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
                 ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
                 echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
@@ -505,7 +519,6 @@ configure_proxy() {
         echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
-        # 输入节点名称
         echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
         read input_name
         if [ -n "$input_name" ]; then
@@ -513,10 +526,10 @@ configure_proxy() {
         else
             node_name="GOST-SS"
         fi
-        # 调用启动函数（Shadowsocks）
-        start_gost "$protocol" "$port" "$method" "$password" "$node_name"
+        start_gost "server" "$port" "$protocol" "$method" "$password"
+    elif [ "$protocol" -eq 5 ]; then
+        start_gost "server" "$port" "$protocol"
     else
-        # HTTP / SOCKS5 / 自适应
         echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
         echo -n -e "${YELLOW}账号 [admin]: ${NC}"
         read input_user
@@ -524,10 +537,104 @@ configure_proxy() {
         echo -n -e "${YELLOW}密码 [123456]: ${NC}"
         read input_pass
         [ -n "$input_pass" ] && password="$input_pass"
-        # 调用启动函数（非 Shadowsocks）
-        start_gost "$protocol" "$port" "$username" "$password"
+        start_gost "server" "$port" "$protocol" "$username" "$password"
     fi
+}
 
+# 配置客户端（连接上级代理）
+configure_client() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}       配置客户端（链式代理）${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    
+    # 选择本地监听协议
+    echo -e "${BLUE}请选择本地监听协议:${NC}"
+    echo -e "  ${GREEN}1${NC}) HTTP"
+    echo -e "  ${GREEN}2${NC}) SOCKS5"
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read local_proto_choice
+    if [[ "$local_proto_choice" == "1" ]]; then
+        local_proto="http"
+    else
+        local_proto="socks5"
+    fi
+    
+    # 本地端口
+    while true; do
+        echo -n -e "${YELLOW}请输入本地监听端口: ${NC}"
+        read port
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}端口无效${NC}"
+        fi
+    done
+    
+    # 本地认证（是否为本机代理添加用户名密码）
+    echo -n -e "${YELLOW}是否为本地代理添加认证？[y/N]: ${NC}"
+    read need_auth
+    local auth_str=""
+    if [[ "$need_auth" =~ ^[Yy]$ ]]; then
+        echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
+        read user
+        [ -z "$user" ] && user="admin"
+        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
+        read pass
+        [ -z "$pass" ] && pass="123456"
+        auth_str="${user}:${pass}"
+    fi
+    
+    # 远程 WebSocket 节点地址
+    echo -e "${BLUE}请输入远程 WebSocket 节点信息:${NC}"
+    echo -n -e "${YELLOW}WebSocket 地址 (格式 ws://IP:端口 或 wss://域名:端口): ${NC}"
+    read remote_ws
+    if [[ -z "$remote_ws" ]]; then
+        echo -e "${RED}远程地址不能为空${NC}"
+        return 1
+    fi
+    
+    # 远程认证（如果远程服务需要认证）
+    echo -n -e "${YELLOW}远程 WebSocket 是否需要认证？[y/N]: ${NC}"
+    read need_remote_auth
+    if [[ "$need_remote_auth" =~ ^[Yy]$ ]]; then
+        echo -n -e "${YELLOW}远程认证用户名: ${NC}"
+        read remote_user
+        echo -n -e "${YELLOW}远程认证密码: ${NC}"
+        read -s remote_pass
+        echo
+        if [[ "$remote_ws" =~ ^(ws|wss):// ]]; then
+            proto="${remote_ws%%://*}"
+            rest="${remote_ws#*://}"
+            remote_ws="${proto}://${remote_user}:${remote_pass}@${rest}"
+        else
+            echo -e "${RED}远程地址格式不正确${NC}"
+            return 1
+        fi
+    fi
+    
+    # 启动链式代理
+    start_gost "client" "$port" "$local_proto" "$auth_str" "" "$remote_ws"
+}
+
+# 统一配置代理入口（服务端或客户端）
+configure_proxy() {
+    if [ ! -f "$GOST_BIN" ]; then
+        echo -e "${RED}请先安装 GOST${NC}"
+        return 1
+    fi
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}       选择运行模式${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "  ${GREEN}1${NC}) 服务端（提供代理服务）"
+    echo -e "  ${GREEN}2${NC}) 客户端（连接上级代理）"
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read mode_choice
+    case $mode_choice in
+        1) configure_server ;;
+        2) configure_client ;;
+        *) echo -e "${RED}无效选择${NC}"; return 1 ;;
+    esac
+    
     echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
     read auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
@@ -575,7 +682,7 @@ show_sub() {
     read -n 1
 }
 
-# 更新脚本（增加快速命令提示）
+# 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -611,7 +718,7 @@ show_menu() {
     echo -e "${BLUE}║        GOST 一键管理脚本            ║${NC}"
     echo -e "${BLUE}╠══════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║  ${GREEN}1${BLUE}) 安装 GOST                       ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}2${BLUE}) 配置代理                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}2${BLUE}) 配置代理（服务端/客户端）        ║${NC}"
     echo -e "${BLUE}║  ${GREEN}3${BLUE}) 查看状态                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
