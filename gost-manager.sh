@@ -329,6 +329,7 @@ start_gost() {
     stop_gost
     local cmd=""
     local proxy_url=""
+    local proxy_url_extra=""
     local ip=$(get_local_ip)
 
     if [ "$mode" = "server" ]; then
@@ -682,7 +683,7 @@ show_sub() {
     read -n 1
 }
 
-# 更新脚本
+# 更新脚本（优化参数，无备用源）
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -690,25 +691,32 @@ update_script() {
     local script_url="https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh"
     local temp_script="/tmp/gost-manager-update.sh"
     echo -e "${YELLOW}正在从远程仓库下载最新脚本...${NC}"
-    if wget -q --timeout=10 -O "$temp_script" "$script_url" 2>/dev/null || curl -fsSL --connect-timeout 10 "$script_url" -o "$temp_script" 2>/dev/null; then
-        if [ -s "$temp_script" ]; then
-            cp "$temp_script" "$0"
-            chmod +x "$0"
-            rm -f "$temp_script"
-            echo -e "${GREEN}✓ 脚本更新成功！${NC}"
-            echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
-            echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
-            echo -n -e "${GREEN}按任意键退出...${NC}"
-            read -n 1
-            exit 0
-        else
-            echo -e "${RED}下载的文件为空，更新失败${NC}"
-        fi
+    
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 10 --retry 3 "$script_url" -o "$temp_script"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=10 --tries=3 -O "$temp_script" "$script_url"
+    else
+        echo -e "${RED}未找到 curl 或 wget${NC}"
+        return 1
+    fi
+
+    if [ -s "$temp_script" ]; then
+        cp "$temp_script" "$0"
+        chmod +x "$0"
+        rm -f "$temp_script"
+        echo -e "${GREEN}✓ 脚本更新成功！${NC}"
+        echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
+        echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC}"
+        echo -n -e "${GREEN}按任意键退出...${NC}"
+        read -n 1
+        exit 0
     else
         echo -e "${RED}下载失败，请检查网络连接${NC}"
+        echo -e "${YELLOW}您可以手动运行: curl -fsSL $script_url -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh${NC}"
+        echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+        read -n 1
     fi
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
 }
 
 # 主菜单
