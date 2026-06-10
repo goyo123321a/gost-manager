@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ============================================
-# GOST 一键管理脚本（修复版）
+# GOST 一键管理脚本（Termux 修复版）
 # 支持单进程多服务 / 多进程，含开机自启、安全加固
 # ============================================
 
@@ -25,16 +25,15 @@ GOST_PID_FILE=""
 START_CMD_FILE=""
 PID_DIR=""
 
-# ========== 安全函数：转义参数供 eval 使用 ==========
-quote() {
-    printf '%s\n' "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
-}
-
 # ========== 基础函数 ==========
 get_local_ip() {
     local ip
-    ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
-    if [ -z "$ip" ]; then
+    # Termux 中 ip 命令可能不存在，使用 ifconfig 或 hostname -I
+    if command -v ip >/dev/null 2>&1; then
+        ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
+    elif command -v ifconfig >/dev/null 2>&1; then
+        ip=$(ifconfig 2>/dev/null | grep -o 'inet addr:[0-9.]*' | cut -d: -f2 | grep -v '127.0.0.1' | head -1)
+    else
         ip=$(hostname -i 2>/dev/null | awk '{print $1}')
     fi
     if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
@@ -103,7 +102,7 @@ get_installed_gost_version() {
     fi
 }
 
-# ========== 安装函数（保持不变，仅添加停止旧进程的提示） ==========
+# ========== 安装函数 ==========
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -115,7 +114,6 @@ version_ge_2_12() {
 
 install_gost_v2() {
     local version=$1
-    # 安装前询问是否停止现有进程
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
         echo -e "${YELLOW}检测到运行的 GOST 进程，是否停止后再安装？[y/N]${NC}"
         read -r stop_ans
@@ -296,7 +294,7 @@ restart_gost_single() {
     if [ -f "$START_CMD_FILE" ] && [ -s "$START_CMD_FILE" ]; then
         local full_cmd
         full_cmd=$(cat "$START_CMD_FILE")
-        stop_single_gost   # 仅停止单进程，不影响独立进程
+        stop_single_gost
         cd "$GOST_DIR"
         eval "nohup $full_cmd > \"$GOST_LOG\" 2>&1 &"
         local pid=$!
@@ -333,7 +331,6 @@ start_gost_independent() {
     fi
 }
 
-# 保存节点信息（追加模式）
 append_node_info() {
     local info="$1"
     {
@@ -344,7 +341,6 @@ append_node_info() {
     echo -e "${GREEN}节点信息已追加到: ${SUBFILE}${NC}"
 }
 
-# 替换时保存节点信息（覆盖，但保留历史）
 replace_node_info() {
     local info="$1"
     {
@@ -355,19 +351,24 @@ replace_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# ========== 安全参数收集函数（使用 printf %q 转义） ==========
+# ========== 参数收集函数（针对 Termux 优化，使用 printf 强制刷新） ==========
+# 定义一个安全读取函数，确保提示立即显示
+safe_read() {
+    local prompt="$1"
+    local var_name="$2"
+    printf "%b" "$prompt" >&2
+    IFS= read -r "$var_name"
+}
+
 collect_http_params() {
     local port user pass
     while true; do
-        echo -n -e "${YELLOW}请输入端口: ${NC}"
-        read -r port
+        safe_read "${YELLOW}请输入端口: ${NC}" port
         [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
-    read -r user; user=${user:-admin}
-    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-    read -r pass; pass=${pass:-123456}
+    safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
+    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
     local ip
     ip=$(get_local_ip)
     local cmd="-L http://${user}:${pass}@:${port}"
@@ -378,15 +379,12 @@ collect_http_params() {
 collect_socks5_params() {
     local port user pass
     while true; do
-        echo -n -e "${YELLOW}请输入端口: ${NC}"
-        read -r port
+        safe_read "${YELLOW}请输入端口: ${NC}" port
         [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
-    read -r user; user=${user:-admin}
-    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-    read -r pass; pass=${pass:-123456}
+    safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
+    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
     local ip
     ip=$(get_local_ip)
     local cmd="-L socks5://${user}:${pass}@:${port}"
@@ -397,15 +395,12 @@ collect_socks5_params() {
 collect_adapt_params() {
     local port user pass
     while true; do
-        echo -n -e "${YELLOW}请输入端口: ${NC}"
-        read -r port
+        safe_read "${YELLOW}请输入端口: ${NC}" port
         [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"
-    read -r user; user=${user:-admin}
-    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-    read -r pass; pass=${pass:-123456}
+    safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
+    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
     local ip
     ip=$(get_local_ip)
     local cmd="-L ${user}:${pass}@:${port}"
@@ -416,17 +411,13 @@ collect_adapt_params() {
 collect_ss_params() {
     local port method pass name
     while true; do
-        echo -n -e "${YELLOW}请输入端口: ${NC}"
-        read -r port
+        safe_read "${YELLOW}请输入端口: ${NC}" port
         [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    echo -n -e "${YELLOW}加密方式 (默认 aes-256-gcm): ${NC}"
-    read -r method; method=${method:-aes-256-gcm}
-    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-    read -r pass; pass=${pass:-123456}
-    echo -n -e "${YELLOW}节点名称 (可选): ${NC}"
-    read -r name
+    safe_read "${YELLOW}加密方式 (默认 aes-256-gcm): ${NC}" method; method=${method:-aes-256-gcm}
+    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
+    safe_read "${YELLOW}节点名称 (可选): ${NC}" name
     local ip
     ip=$(get_local_ip)
     local cmd="-L ss://${method}:${pass}@:${port}"
@@ -438,16 +429,13 @@ collect_ss_params() {
 collect_ws_params() {
     local port path
     while true; do
-        echo -n -e "${YELLOW}请输入监听端口: ${NC}"
-        read -r port
+        safe_read "${YELLOW}请输入监听端口: ${NC}" port
         [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    echo -n -e "${YELLOW}WebSocket 路径 (默认 /ws): ${NC}"
-    read -r path; path=${path:-/ws}
+    safe_read "${YELLOW}WebSocket 路径 (默认 /ws): ${NC}" path; path=${path:-/ws}
     local ip
     ip=$(get_local_ip)
-    # 注意：路径不需要额外转义，GOST 接受原始字符串
     local cmd="-L ws://:${port}?path=${path}"
     local desc="WebSocket 代理: ws://${ip}:${port}${path} (无认证)"
     echo "$cmd|||$desc"
@@ -457,8 +445,7 @@ collect_chain_params() {
     echo -e "${BLUE}请选择本地代理类型:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
-    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
-    read -r local_type
+    safe_read "${YELLOW}请输入 [1-2]: ${NC}" local_type
     local local_proto=""
     case $local_type in
         1) local_proto="http" ;;
@@ -467,20 +454,16 @@ collect_chain_params() {
     esac
     local local_port
     while true; do
-        echo -n -e "${YELLOW}请输入本地监听端口: ${NC}"
-        read -r local_port
+        safe_read "${YELLOW}请输入本地监听端口: ${NC}" local_port
         [[ "$local_port" =~ ^[0-9]+$ ]] && [ "$local_port" -ge 1 ] && [ "$local_port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    echo -n -e "${YELLOW}本地代理是否需要认证？[y/N]: ${NC}"
-    read -r local_auth
+    safe_read "${YELLOW}本地代理是否需要认证？[y/N]: ${NC}" local_auth
     local local_listen=""
     local local_listen_arg=""
     if [[ "$local_auth" =~ ^[Yy]$ ]]; then
-        echo -n -e "${YELLOW}本地用户名 (默认 admin): ${NC}"
-        read -r local_user; local_user=${local_user:-admin}
-        echo -n -e "${YELLOW}本地密码 (默认 123456): ${NC}"
-        read -r local_pass; local_pass=${local_pass:-123456}
+        safe_read "${YELLOW}本地用户名 (默认 admin): ${NC}" local_user; local_user=${local_user:-admin}
+        safe_read "${YELLOW}本地密码 (默认 123456): ${NC}" local_pass; local_pass=${local_pass:-123456}
         local_listen="-L ${local_proto}://${local_user}:${local_pass}@:${local_port}"
         local_listen_arg="${local_user}:${local_pass}@:${local_port}"
     else
@@ -490,37 +473,27 @@ collect_chain_params() {
     echo -e "${YELLOW}请选择远程转发模式:${NC}"
     echo -e "  ${GREEN}1${NC}) WebSocket (ws/wss)"
     echo -e "  ${GREEN}2${NC}) SSH 端口转发"
-    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
-    read -r remote_mode
+    safe_read "${YELLOW}请输入 [1-2]: ${NC}" remote_mode
     local remote_url=""
     if [ "$remote_mode" = "1" ]; then
-        echo -e "${YELLOW}请输入远程 WebSocket 地址 (格式: ws://host:port/path 或 wss://...): ${NC}"
-        read -r remote_url
+        safe_read "${YELLOW}请输入远程 WebSocket 地址 (格式: ws://host:port/path 或 wss://...): ${NC}" remote_url
         while [ -z "$remote_url" ]; do
-            echo -e "${RED}地址不能为空${NC}"
-            read -r remote_url
+            safe_read "${RED}地址不能为空${NC}" remote_url
         done
         local cmd="$local_listen -F $remote_url"
         local desc="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 ${remote_url}"
         echo "$cmd|||$desc"
     elif [ "$remote_mode" = "2" ]; then
-        echo -n -e "${YELLOW}请输入 SSH 服务器地址: ${NC}"
-        read -r ssh_host
+        safe_read "${YELLOW}请输入 SSH 服务器地址: ${NC}" ssh_host
         [ -z "$ssh_host" ] && { echo -e "${RED}地址不能为空${NC}"; return 1; }
-        echo -n -e "${YELLOW}请输入 SSH 端口 (默认 22): ${NC}"
-        read -r ssh_port; ssh_port=${ssh_port:-22}
-        echo -n -e "${YELLOW}请输入 SSH 用户名: ${NC}"
-        read -r ssh_user
+        safe_read "${YELLOW}请输入 SSH 端口 (默认 22): ${NC}" ssh_port; ssh_port=${ssh_port:-22}
+        safe_read "${YELLOW}请输入 SSH 用户名: ${NC}" ssh_user
         [ -z "$ssh_user" ] && { echo -e "${RED}用户名不能为空${NC}"; return 1; }
         echo -e "${YELLOW}SSH 认证方式: 1) 密码认证  2) 密钥认证${NC}"
-        echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
-        read -r auth_type
+        safe_read "${YELLOW}请输入 [1-2]: ${NC}" auth_type
         local ssh_auth=""
         if [ "$auth_type" = "1" ]; then
-            echo -n -e "${YELLOW}请输入 SSH 密码: ${NC}"
-            IFS= read -r -s ssh_pass
-            echo
-            # 密码转义（用于 URL，但 GOST 支持特殊字符）
+            safe_read "${YELLOW}请输入 SSH 密码: ${NC}" ssh_pass
             ssh_auth="${ssh_user}:${ssh_pass}"
         else
             ssh_auth="${ssh_user}"
@@ -535,7 +508,6 @@ collect_chain_params() {
     fi
 }
 
-# DNS 参数收集（对 hosts 进行 URL 编码）
 url_encode() {
     local string="$1"
     local encoded=""
@@ -552,30 +524,25 @@ url_encode() {
 
 collect_dns_params() {
     local port
-    while true; do
-        echo -n -e "${YELLOW}请输入 DNS 监听端口 (默认 53): ${NC}"
-        read -r port
-        [ -z "$port" ] && port=53
-        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
-        echo -e "${RED}端口无效${NC}"
+    # Termux 中默认使用 5353 避免权限问题
+    safe_read "${YELLOW}请输入 DNS 监听端口 (默认 5353): ${NC}" port
+    [ -z "$port" ] && port=5353
+    while ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; do
+        safe_read "${RED}端口无效，请重新输入: ${NC}" port
+        [ -z "$port" ] && port=5353
     done
-    if [ "$port" -eq 53 ] && [ "$EUID" -ne 0 ]; then
-        echo -e "${YELLOW}警告: 端口 53 需要 root 权限，可能无法启动${NC}"
-    fi
-    echo -n -e "${YELLOW}请输入上游 DNS 服务器 (默认 8.8.8.8, 多个用逗号分隔): ${NC}"
-    read -r upstream; upstream=${upstream:-8.8.8.8}
-    echo -n -e "${YELLOW}请输入缓存 TTL (秒，默认 60): ${NC}"
-    read -r ttl; ttl=${ttl:-60}
+    safe_read "${YELLOW}请输入上游 DNS 服务器 (默认 8.8.8.8, 多个用逗号分隔): ${NC}" upstream
+    upstream=${upstream:-8.8.8.8}
+    safe_read "${YELLOW}请输入缓存 TTL (秒，默认 60): ${NC}" ttl
+    ttl=${ttl:-60}
     local hosts=""
-    echo -n -e "${YELLOW}是否添加自定义 hosts 映射？[y/N]: ${NC}"
-    read -r add_hosts
+    safe_read "${YELLOW}是否添加自定义 hosts 映射？[y/N]: ${NC}" add_hosts
     if [[ "$add_hosts" =~ ^[Yy]$ ]]; then
         echo -e "${BLUE}请输入域名:IP，每行一条，空行结束:${NC}"
         while true; do
-            read -r line
+            safe_read "> " line
             [ -z "$line" ] && break
             if [[ "$line" =~ .+:.* ]]; then
-                # 对每个 hosts 条目进行 URL 编码
                 local encoded_line
                 encoded_line=$(url_encode "$line")
                 if [ -n "$hosts" ]; then
@@ -608,8 +575,7 @@ configure_proxy() {
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
     echo -e "  ${GREEN}6${NC}) 链式代理"
     echo -e "  ${GREEN}7${NC}) DNS 代理"
-    echo -n -e "${YELLOW}请输入 [1-7]: ${NC}"
-    read -r ptype
+    safe_read "${YELLOW}请输入 [1-7]: ${NC}" ptype
     local result=""
     case $ptype in
         1) result=$(collect_http_params) ;;
@@ -629,14 +595,10 @@ configure_proxy() {
     local desc
     cmd_part=$(echo "$result" | cut -d'|' -f1)
     desc=$(echo "$result" | cut -d'|' -f3-)
-    # 清空旧配置
     echo "$GOST_BIN $cmd_part" > "$START_CMD_FILE"
     restart_gost_single
     replace_node_info "$desc"
-
-    # 询问开机自启
-    echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
-    read -r auto_start
+    safe_read "${YELLOW}是否开启开机自启？[y/N]: ${NC}" auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
         enable_autostart
     fi
@@ -655,8 +617,7 @@ add_service_to_single() {
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
     echo -e "  ${GREEN}6${NC}) 链式代理"
     echo -e "  ${GREEN}7${NC}) DNS 代理"
-    echo -n -e "${YELLOW}请输入 [1-7]: ${NC}"
-    read -r ptype
+    safe_read "${YELLOW}请输入 [1-7]: ${NC}" ptype
     local result=""
     case $ptype in
         1) result=$(collect_http_params) ;;
@@ -699,8 +660,7 @@ add_service_independent() {
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
     echo -e "  ${GREEN}6${NC}) 链式代理"
     echo -e "  ${GREEN}7${NC}) DNS 代理"
-    echo -n -e "${YELLOW}请输入 [1-7]: ${NC}"
-    read -r ptype
+    safe_read "${YELLOW}请输入 [1-7]: ${NC}" ptype
     local result=""
     case $ptype in
         1) result=$(collect_http_params) ;;
@@ -722,7 +682,6 @@ add_service_independent() {
     desc=$(echo "$result" | cut -d'|' -f3-)
     local full_cmd="$GOST_BIN $cmd_part"
     start_gost_independent "$full_cmd" "$desc"
-    # 独立进程模式下不保存到 sub.txt（可选），但可以追加说明
     echo -e "${YELLOW}独立进程已启动，未记录到节点文件。${NC}"
 }
 
@@ -730,8 +689,7 @@ add_service() {
     echo -e "${BLUE}请选择添加方式:${NC}"
     echo -e "  ${GREEN}1${NC}) 单进程多服务（追加服务并重启，所有服务共用一个进程）"
     echo -e "  ${GREEN}2${NC}) 独立进程（启动新进程，不影响现有服务）"
-    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
-    read -r mode
+    safe_read "${YELLOW}请输入 [1-2]: ${NC}" mode
     case $mode in
         1) add_service_to_single ;;
         2) add_service_independent ;;
@@ -743,7 +701,6 @@ add_service() {
 enable_autostart() {
     local current_cron
     current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost" || true)
-    # 生成保活脚本（仅用于单进程模式）
     local keepalive_script="$GOST_DIR/keepalive.sh"
     cat > "$keepalive_script" << EOF
 #!/usr/bin/env bash
@@ -760,7 +717,6 @@ if [ -f "\$START_CMD_FILE" ] && [ -s "\$START_CMD_FILE" ]; then
 fi
 EOF
     chmod +x "$keepalive_script"
-    # 添加 cron 任务：每5分钟检查一次单进程
     (echo "$current_cron"; echo "@reboot $keepalive_script"; echo "*/5 * * * * $keepalive_script") | crontab -
     echo -e "${GREEN}✓ 已配置开机自启和进程保活（单进程模式）${NC}"
 }
@@ -800,7 +756,6 @@ show_status() {
                 local infofile="${pidfile%.pid}.info"
                 local desc=""
                 [ -f "$infofile" ] && desc=$(cat "$infofile")
-                # 尝试获取命令行
                 local cmdline=""
                 if [ -f "/proc/$pid/cmdline" ]; then
                     cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
@@ -818,9 +773,7 @@ show_status() {
         echo -e "${YELLOW}没有运行中的独立进程${NC}"
     fi
     echo -e "${BLUE}========================================${NC}"
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
-    echo
+    safe_read "${GREEN}按任意键返回菜单...${NC}" dummy
 }
 
 # ========== 停止服务 ==========
@@ -832,8 +785,7 @@ stop_service() {
     echo -e "  ${GREEN}2${NC}) 停止指定独立进程"
     echo -e "  ${GREEN}3${NC}) 停止所有 GOST 进程"
     echo -e "  ${GREEN}0${NC}) 返回"
-    echo -n -e "${YELLOW}请输入 [0-3]: ${NC}"
-    read -r opt
+    safe_read "${YELLOW}请输入 [0-3]: ${NC}" opt
     case $opt in
         1)
             stop_single_gost
@@ -858,17 +810,14 @@ stop_service() {
             done
             if [ ${#pids[@]} -eq 0 ]; then
                 echo -e "${YELLOW}没有运行中的独立进程${NC}"
-                echo -n -e "${GREEN}按任意键返回...${NC}"
-                read -n 1
-                echo
+                safe_read "${GREEN}按任意键返回...${NC}" dummy
                 return
             fi
             echo -e "${YELLOW}请选择要停止的进程:${NC}"
             for i in "${!pids[@]}"; do
                 echo "  $((i+1))) PID ${pids[$i]} - ${descs[$i]}"
             done
-            echo -n -e "${YELLOW}请输入数字: ${NC}"
-            read -r idx
+            safe_read "${YELLOW}请输入数字: ${NC}" idx
             if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -le ${#pids[@]} ]; then
                 local target_pid=${pids[$((idx-1))]}
                 kill "$target_pid" 2>/dev/null || true
@@ -890,9 +839,7 @@ stop_service() {
             return
             ;;
     esac
-    echo -n -e "${GREEN}按任意键返回...${NC}"
-    read -n 1
-    echo
+    safe_read "${GREEN}按任意键返回...${NC}" dummy
 }
 
 # ========== 其他功能 ==========
@@ -902,9 +849,7 @@ uninstall_gost() {
     crontab -l 2>/dev/null | grep -v "$GOST_DIR" | crontab - 2>/dev/null || true
     rm -rf "$GOST_DIR"
     echo -e "${GREEN}✓ 卸载完成${NC}"
-    echo -n -e "${GREEN}按任意键返回...${NC}"
-    read -n 1
-    echo
+    safe_read "${GREEN}按任意键返回...${NC}" dummy
 }
 
 update_script() {
@@ -923,8 +868,7 @@ update_script() {
             echo -e "${GREEN}✓ 脚本更新成功！${NC}"
             echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
             echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
-            echo -n -e "${GREEN}按任意键退出...${NC}"
-            read -n 1
+            safe_read "${GREEN}按任意键退出...${NC}" dummy
             exit 0
         else
             echo -e "${RED}下载的文件为空，更新失败${NC}"
@@ -934,12 +878,10 @@ update_script() {
         echo -e "${YELLOW}请手动执行以下命令更新脚本：${NC}"
         echo -e "${GREEN}curl -fsSL ${script_url} -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh${NC}"
         echo -e "${YELLOW}然后重新运行 ~/gost-manager.sh${NC}"
-        echo -n -e "${GREEN}按任意键退出...${NC}"
-        read -n 1
+        safe_read "${GREEN}按任意键退出...${NC}" dummy
         exit 1
     fi
-    echo -n -e "${GREEN}按任意键退出...${NC}"
-    read -n 1
+    safe_read "${GREEN}按任意键退出...${NC}" dummy
     exit 1
 }
 
@@ -953,9 +895,7 @@ show_sub() {
         echo -e "${RED}暂无节点信息，请先配置代理。${NC}"
     fi
     echo -e "${BLUE}========================================${NC}"
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
-    echo
+    safe_read "${GREEN}按任意键返回菜单...${NC}" dummy
 }
 
 # ========== 主菜单 ==========
@@ -970,9 +910,9 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}6${BLUE}) 查看节点信息                   ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}7${BLUE}) 停止服务                       ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}8${BLUE}) 添加服务                       ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}7${NC}) 停止服务                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}8${NC}) 添加服务                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}0${NC}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
     echo -n -e "${YELLOW}请输入 [0-8]: ${NC}"
 }
@@ -980,7 +920,6 @@ show_menu() {
 # ========== 入口 ==========
 main() {
     detect_os_arch
-    # 如果已有单进程配置但未运行，尝试启动
     if [ -f "$START_CMD_FILE" ] && [ -s "$START_CMD_FILE" ] && [ ! -f "$GOST_PID_FILE" ]; then
         echo -e "${YELLOW}检测到已有配置但未运行，是否现在启动？[y/N]${NC}"
         read -r start_now
