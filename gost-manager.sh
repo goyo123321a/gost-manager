@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ============================================
-# GOST 一键管理脚本（Termux 修复版）
+# GOST 一键管理脚本（Termux 最终修复版）
 # 支持单进程多服务 / 多进程，含开机自启、安全加固
 # ============================================
 
@@ -28,7 +28,6 @@ PID_DIR=""
 # ========== 基础函数 ==========
 get_local_ip() {
     local ip
-    # Termux 中 ip 命令可能不存在，使用 ifconfig 或 hostname -I
     if command -v ip >/dev/null 2>&1; then
         ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
     elif command -v ifconfig >/dev/null 2>&1; then
@@ -296,6 +295,8 @@ restart_gost_single() {
         full_cmd=$(cat "$START_CMD_FILE")
         stop_single_gost
         cd "$GOST_DIR"
+        # 关键修复：使用数组或直接执行，避免引号问题
+        # 由于 full_cmd 已经是完整的命令字符串，用 eval 执行时不要额外加引号
         eval "nohup $full_cmd > \"$GOST_LOG\" 2>&1 &"
         local pid=$!
         echo $pid > "$GOST_PID_FILE"
@@ -351,8 +352,7 @@ replace_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# ========== 参数收集函数（针对 Termux 优化，使用 printf 强制刷新） ==========
-# 定义一个安全读取函数，确保提示立即显示
+# ========== 参数收集函数（针对 Termux 优化） ==========
 safe_read() {
     local prompt="$1"
     local var_name="$2"
@@ -524,7 +524,6 @@ url_encode() {
 
 collect_dns_params() {
     local port
-    # Termux 中默认使用 5353 避免权限问题
     safe_read "${YELLOW}请输入 DNS 监听端口 (默认 5353): ${NC}" port
     [ -z "$port" ] && port=5353
     while ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; do
@@ -557,7 +556,8 @@ collect_dns_params() {
     fi
     local query="dns=${upstream}&ttl=${ttl}"
     [ -n "$hosts" ] && query="${query}&hosts=${hosts}"
-    local cmd="-L \"dns://:${port}?${query}\""
+    # 关键修复：-L 参数不要加额外双引号，以免 eval 解析错误
+    local cmd="-L dns://:${port}?${query}"
     local desc="DNS 代理: udp://0.0.0.0:${port} (上游: ${upstream}, TTL: ${ttl})"
     echo "$cmd|||$desc"
 }
@@ -595,6 +595,7 @@ configure_proxy() {
     local desc
     cmd_part=$(echo "$result" | cut -d'|' -f1)
     desc=$(echo "$result" | cut -d'|' -f3-)
+    # 写入完整启动命令（gost 二进制路径已在 START_CMD_FILE 中保存）
     echo "$GOST_BIN $cmd_part" > "$START_CMD_FILE"
     restart_gost_single
     replace_node_info "$desc"
