@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ============================================
-# GOST 一键管理脚本（Termux 最终修复版）
+# GOST 一键管理脚本（Termux 最终修复版 + root 兼容）
 # 支持单进程多服务 / 多进程，含开机自启、安全加固
 # ============================================
 
@@ -45,12 +45,13 @@ setup_workspace() {
     local CURRENT_USER WORK_HOME NORMAL_USER
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
-        if [[ -n "$SUDO_USER" ]]; then
+        # 安全地获取普通用户：优先 SUDO_USER，然后 USER，最后从 passwd 查找
+        if [[ -n "${SUDO_USER:-}" ]]; then
             NORMAL_USER="$SUDO_USER"
-        elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
+        elif [[ -n "${USER:-}" ]] && [[ "$USER" != "root" ]]; then
             NORMAL_USER="$USER"
         else
-            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null)
+            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null || true)
         fi
         if [[ -n "$NORMAL_USER" ]]; then
             WORK_HOME="/home/$NORMAL_USER"
@@ -295,7 +296,6 @@ restart_gost_single() {
         full_cmd=$(cat "$START_CMD_FILE")
         stop_single_gost
         cd "$GOST_DIR"
-        # 直接执行，不使用 eval（避免引号问题）
         nohup $full_cmd > "$GOST_LOG" 2>&1 &
         local pid=$!
         echo $pid > "$GOST_PID_FILE"
