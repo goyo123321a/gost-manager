@@ -83,36 +83,6 @@ get_installed_gost_version() {
     fi
 }
 
-# 检查是否存在已安装的 GOST（无论是否运行）
-check_existing_gost() {
-    local installed_ver=$(get_installed_gost_version)
-    if [ "$installed_ver" != "未安装" ]; then
-        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
-        # 检查是否有运行中的进程
-        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-            local pid=$(pgrep -f "$GOST_BIN" | head -1)
-            echo -e "${YELLOW}检测到运行中的进程 (PID: ${pid})${NC}"
-        else
-            echo -e "${YELLOW}没有运行中的 GOST 进程${NC}"
-        fi
-        echo -n -e "${YELLOW}是否覆盖安装新版本？[y/N]: ${NC}"
-        read ans
-        if [[ "$ans" =~ ^[Yy]$ ]]; then
-            # 如果进程在运行，先停止
-            if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-                stop_gost
-            fi
-            return 0
-        else
-            echo -e "${RED}取消安装。${NC}"
-            return 1
-        fi
-    else
-        echo -e "${GREEN}未检测到已安装的 GOST。${NC}"
-        return 0
-    fi
-}
-
 # 停止 GOST（清理进程和 PID 文件）
 stop_gost() {
     if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
@@ -143,10 +113,6 @@ version_ge_2_12() {
 # 安装 v2（兼容新旧格式）
 install_gost_v2() {
     local version=$1
-    # 检查已安装状态（询问是否覆盖）
-    if ! check_existing_gost; then
-        return 1
-    fi
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     cd "$GOST_DIR" || return 1
@@ -164,7 +130,6 @@ install_gost_v2() {
         fi
     fi
 
-    # 旧格式 .gz（多种备选URL）
     if [ $downloaded -eq 0 ]; then
         echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
@@ -230,10 +195,6 @@ install_gost_v2() {
 # 安装 v3
 install_gost_v3() {
     local version=$1
-    # 检查已安装状态（询问是否覆盖）
-    if ! check_existing_gost; then
-        return 1
-    fi
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
     cd "$GOST_DIR" || return 1
@@ -330,25 +291,6 @@ get_v3_versions() {
         echo -e "${RED}无效选择${NC}"
         return 1
     fi
-}
-
-# 选择版本
-select_version_to_install() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}       选择 GOST 版本${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "  ${GREEN}1${NC}) GOST v2"
-    echo -e "  ${GREEN}2${NC}) GOST v3"
-    echo -e "  ${GREEN}0${NC}) 返回"
-    echo -e "${BLUE}========================================${NC}"
-    echo -n -e "${YELLOW}请选择 [0-2]: ${NC}"
-    read choice
-    case $choice in
-        1) get_v2_versions ;;
-        2) get_v3_versions ;;
-        0) return 1 ;;
-        *) echo -e "${RED}无效选择${NC}"; return 1 ;;
-    esac
 }
 
 # 保存节点信息到文件
@@ -487,12 +429,34 @@ version_ge() {
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
-# 配置代理流程
+# 配置代理流程（询问是否更改配置）
 configure_proxy() {
     if [ ! -f "$GOST_BIN" ]; then
-        echo -e "${RED}请先安装 GOST${NC}"
+        echo -e "${RED}请先安装 GOST（选项 1）${NC}"
         return 1
     fi
+
+    # 显示当前版本和运行状态
+    local installed_ver=$(get_installed_gost_version)
+    echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        local pid=$(pgrep -f "$GOST_BIN" | head -1)
+        echo -e "${YELLOW}检测到运行中的进程 (PID: ${pid})${NC}"
+    else
+        echo -e "${YELLOW}没有运行中的 GOST 进程${NC}"
+    fi
+
+    echo -n -e "${YELLOW}是否更改配置？[y/N]: ${NC}"
+    read change_config
+    if [[ ! "$change_config" =~ ^[Yy]$ ]]; then
+        echo -e "${GREEN}取消配置。${NC}"
+        return 0
+    fi
+
+    # 停止当前运行的 GOST 进程（如果存在）
+    stop_gost
+
+    # 进入配置流程
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          配置代理${NC}"
     echo -e "${BLUE}========================================${NC}"
@@ -694,16 +658,38 @@ main() {
         show_menu
         read choice
         case $choice in
-            1) if select_version_to_install; then
-                   if [ -f "$GOST_BIN" ]; then
-                       echo
-                       echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
-                       read config_now
-                       if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
-                           configure_proxy
-                       fi
-                   fi
-               fi ;;
+            1) 
+                # 先检查是否已安装
+                local installed_ver=$(get_installed_gost_version)
+                if [ "$installed_ver" != "未安装" ]; then
+                    echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+                    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+                        local pid=$(pgrep -f "$GOST_BIN" | head -1)
+                        echo -e "${YELLOW}检测到运行中的进程 (PID: ${pid})${NC}"
+                    else
+                        echo -e "${YELLOW}没有运行中的 GOST 进程${NC}"
+                    fi
+                    echo -n -e "${YELLOW}是否覆盖安装新版本？[y/N]: ${NC}"
+                    read ans
+                    if [[ "$ans" =~ ^[Yy]$ ]]; then
+                        # 停止进程（如果有）
+                        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+                            stop_gost
+                        fi
+                        # 进入版本选择
+                        if ! select_version_to_install; then
+                            echo -e "${RED}安装取消或失败。${NC}"
+                        fi
+                    else
+                        echo -e "${RED}取消安装。${NC}"
+                    fi
+                else
+                    # 未安装，直接进入版本选择
+                    if ! select_version_to_install; then
+                        echo -e "${RED}安装取消或失败。${NC}"
+                    fi
+                fi
+                ;;
             2) configure_proxy ;;
             3) show_status ;;
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
