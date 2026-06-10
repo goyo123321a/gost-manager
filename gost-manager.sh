@@ -402,7 +402,55 @@ configure_websocket() {
     start_gost_generic "$cmd" "$info"
 }
 
-# 链式代理配置函数（本地代理可选认证，远程 WebSocket 无认证）
+# SSH 端口转发配置函数（新增）
+configure_ssh() {
+    echo -e "${BLUE}--- SSH 端口转发配置 ---${NC}"
+    local ssh_host
+    echo -n -e "${YELLOW}请输入 SSH 服务器地址: ${NC}"
+    read ssh_host
+    if [ -z "$ssh_host" ]; then
+        echo -e "${RED}SSH 地址不能为空${NC}"
+        return 1
+    fi
+    local ssh_port
+    echo -n -e "${YELLOW}请输入 SSH 端口 (默认 22): ${NC}"
+    read ssh_port
+    [ -z "$ssh_port" ] && ssh_port="22"
+    local ssh_user
+    echo -n -e "${YELLOW}请输入 SSH 用户名: ${NC}"
+    read ssh_user
+    if [ -z "$ssh_user" ]; then
+        echo -e "${RED}SSH 用户名不能为空${NC}"
+        return 1
+    fi
+    echo -e "${YELLOW}SSH 认证方式:${NC}"
+    echo -e "  ${GREEN}1${NC}) 密码认证"
+    echo -e "  ${GREEN}2${NC}) 密钥认证 (需已配置密钥，无需密码)"
+    echo -n -e "${YELLOW}请输入 [1-2] (默认 1): ${NC}"
+    read auth_type
+    if [[ -z "$auth_type" ]]; then
+        auth_type=1
+    fi
+    local remote_auth_part=""
+    if [[ "$auth_type" == "1" ]]; then
+        echo -n -e "${YELLOW}请输入 SSH 密码: ${NC}"
+        read -s ssh_pass
+        echo
+        if [ -z "$ssh_pass" ]; then
+            echo -e "${RED}密码不能为空${NC}"
+            return 1
+        fi
+        remote_auth_part="${ssh_user}:${ssh_pass}@${ssh_host}:${ssh_port}"
+    else
+        remote_auth_part="${ssh_user}@${ssh_host}:${ssh_port}"
+    fi
+    local remote_url="ssh://${remote_auth_part}"
+    echo "$remote_url"
+    # 返回远程 URL
+    echo "$remote_url"
+}
+
+# 链式代理配置函数（本地代理可选认证，远程支持 WS/WSS 和 SSH）
 configure_chain() {
     echo -e "${BLUE}请选择本地代理类型:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
@@ -439,13 +487,30 @@ configure_chain() {
         [ -z "$local_pass" ] && local_pass="123456"
     fi
 
-    echo -e "${YELLOW}请输入远程 WebSocket 地址:${NC}"
-    echo -e "  格式: ws://host:port/path 或 wss://host:port/path (无认证)"
-    echo -n -e "${YELLOW}远程地址: ${NC}"
-    read remote_url
-    if [[ -z "$remote_url" ]]; then
-        echo -e "${RED}远程地址不能为空${NC}"
-        return 1
+    echo -e "${BLUE}请选择远程转发模式:${NC}"
+    echo -e "  ${GREEN}1${NC}) WebSocket (ws/wss)"
+    echo -e "  ${GREEN}2${NC}) SSH 端口转发"
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read remote_mode
+    if [[ -z "$remote_mode" ]]; then
+        remote_mode=1
+    fi
+
+    local remote_url=""
+    if [[ "$remote_mode" == "1" ]]; then
+        echo -e "${YELLOW}请输入远程 WebSocket 地址:${NC}"
+        echo -e "  格式: ws://host:port/path 或 wss://host:port/path (无认证)"
+        echo -n -e "${YELLOW}远程地址: ${NC}"
+        read remote_url
+        if [[ -z "$remote_url" ]]; then
+            echo -e "${RED}远程地址不能为空${NC}"
+            return 1
+        fi
+    else
+        remote_url=$(configure_ssh)
+        if [ $? -ne 0 ]; then
+            return 1
+        fi
     fi
 
     # 构建本地监听参数
@@ -456,7 +521,7 @@ configure_chain() {
         local_listen="-L ${local_proto}://:${local_port}"
     fi
 
-    # 远程转发无认证，直接使用用户输入的地址（不加额外引号）
+    # 远程转发
     local cmd="$GOST_BIN $local_listen -F $remote_url"
     local info="链式代理: 本地 ${local_proto}://"
     if [ -n "$local_user" ]; then
@@ -594,7 +659,7 @@ configure_proxy() {
     echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
     echo -e "  ${GREEN}4${NC}) Shadowsocks"
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
-    echo -e "  ${GREEN}6${NC}) 链式代理 (本地 HTTP/SOCKS5 -> 远程 WS/WSS)"
+    echo -e "  ${GREEN}6${NC}) 链式代理 (本地 HTTP/SOCKS5 -> 远程 WS/WSS/SSH)"
     echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
     read protocol
     [[ ! "$protocol" =~ ^[1-6]$ ]] && protocol=3
