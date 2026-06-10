@@ -295,9 +295,8 @@ restart_gost_single() {
         full_cmd=$(cat "$START_CMD_FILE")
         stop_single_gost
         cd "$GOST_DIR"
-        # 关键修复：使用数组或直接执行，避免引号问题
-        # 由于 full_cmd 已经是完整的命令字符串，用 eval 执行时不要额外加引号
-        eval "nohup $full_cmd > \"$GOST_LOG\" 2>&1 &"
+        # 直接执行，不使用 eval（避免引号问题）
+        nohup $full_cmd > "$GOST_LOG" 2>&1 &
         local pid=$!
         echo $pid > "$GOST_PID_FILE"
         echo -e "${GREEN}单进程模式已启动，PID: $pid${NC}"
@@ -316,7 +315,7 @@ start_gost_independent() {
     timestamp=$(date +%s%N 2>/dev/null || date +%s)$RANDOM
     local pidfile="$PID_DIR/service_${timestamp}.pid"
     local infofile="${pidfile%.pid}.info"
-    eval "nohup $cmd > \"$GOST_LOG\" 2>&1 &"
+    nohup $cmd > "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$pidfile"
     echo "$description" > "$infofile"
@@ -556,8 +555,8 @@ collect_dns_params() {
     fi
     local query="dns=${upstream}&ttl=${ttl}"
     [ -n "$hosts" ] && query="${query}&hosts=${hosts}"
-    # 关键修复：-L 参数不要加额外双引号，以免 eval 解析错误
-    local cmd="-L dns://:${port}?${query}"
+    # 关键修复：整个 dns URL 用单引号包裹，防止 ?& 被 shell 解释
+    local cmd="-L 'dns://:${port}?${query}'"
     local desc="DNS 代理: udp://0.0.0.0:${port} (上游: ${upstream}, TTL: ${ttl})"
     echo "$cmd|||$desc"
 }
@@ -595,7 +594,6 @@ configure_proxy() {
     local desc
     cmd_part=$(echo "$result" | cut -d'|' -f1)
     desc=$(echo "$result" | cut -d'|' -f3-)
-    # 写入完整启动命令（gost 二进制路径已在 START_CMD_FILE 中保存）
     echo "$GOST_BIN $cmd_part" > "$START_CMD_FILE"
     restart_gost_single
     replace_node_info "$desc"
@@ -712,7 +710,7 @@ GOST_BIN="\$GOST_DIR/gost"
 if [ -f "\$START_CMD_FILE" ] && [ -s "\$START_CMD_FILE" ]; then
     if ! pgrep -f "\$GOST_BIN" > /dev/null 2>&1; then
         cd "\$GOST_DIR"
-        eval "nohup \$(cat "\$START_CMD_FILE") > \$GOST_DIR/gost.log 2>&1 &"
+        nohup \$(cat "\$START_CMD_FILE") > \$GOST_DIR/gost.log 2>&1 &
         echo \$! > "\$GOST_PID_FILE"
     fi
 fi
