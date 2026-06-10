@@ -483,15 +483,15 @@ version_ge() {
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
 }
 
-# 配置代理流程（优化版：未安装则引导安装，已安装则询问是否更改）
+# 配置代理流程（接受一个可选参数：auto 表示跳过确认步骤）
 configure_proxy() {
-    # 检查是否已安装 GOST
+    local skip_confirm=$1
+    # 如果未安装，引导安装
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
         echo -e "${RED}未检测到 GOST，请先安装。${NC}"
         echo -n -e "${YELLOW}是否现在安装？[y/N]: ${NC}"
         read ans
         if [[ "$ans" =~ ^[Yy]$ ]]; then
-            # 进入安装流程
             if select_version_to_install; then
                 if [ -f "$GOST_BIN" ]; then
                     echo -e "${GREEN}安装完成，继续配置代理。${NC}"
@@ -515,20 +515,22 @@ configure_proxy() {
         fi
     fi
 
-    # 已安装，询问是否更改配置
-    local installed_ver=$(get_installed_gost_version)
-    echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
-    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        local pid=$(pgrep -f "$GOST_BIN" | head -1)
-        echo -e "${YELLOW}当前有运行中的进程 (PID: ${pid})，更改配置会先停止进程。${NC}"
-    fi
-    echo -n -e "${YELLOW}是否重新配置代理？[y/N]: ${NC}"
-    read ans
-    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
-        echo -e "${RED}配置取消。${NC}"
-        echo -n -e "${GREEN}按任意键返回...${NC}"
-        read -n 1
-        return 1
+    # 已安装，询问是否重新配置（如果是 auto 模式则跳过询问）
+    if [ "$skip_confirm" != "auto" ]; then
+        local installed_ver=$(get_installed_gost_version)
+        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            local pid=$(pgrep -f "$GOST_BIN" | head -1)
+            echo -e "${YELLOW}当前有运行中的进程 (PID: ${pid})，更改配置会先停止进程。${NC}"
+        fi
+        echo -n -e "${YELLOW}是否重新配置代理？[y/N]: ${NC}"
+        read ans
+        if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}配置取消。${NC}"
+            echo -n -e "${GREEN}按任意键返回...${NC}"
+            read -n 1
+            return 1
+        fi
     fi
 
     # 开始配置端口、协议等
@@ -739,11 +741,11 @@ main() {
                        echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
                        read config_now
                        if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
-                           configure_proxy
+                           configure_proxy "auto"   # 自动模式，跳过二次确认
                        fi
                    fi
                fi ;;
-            2) configure_proxy ;;
+            2) configure_proxy ;;   # 正常模式，会询问是否重新配置
             3) show_status ;;
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             5) update_script ;;
