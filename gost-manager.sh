@@ -354,8 +354,120 @@ save_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 启动代理（Shadowsocks 增加 Base64 输出，并保存节点信息，支持节点名称）
-start_gost() {
+# 通用启动函数（使用 eval 确保参数正确）
+start_gost_generic() {
+    local cmd="$1"
+    local info="$2"
+    cd "$GOST_DIR" || return 1
+    stop_gost
+    echo -e "${GREEN}启动代理...${NC}"
+    eval "nohup $cmd > \"$GOST_LOG\" 2>&1 &"
+    local pid=$!
+    echo $pid > "$GOST_PID_FILE"
+    sleep 2
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ 代理运行中 (PID: $pid)${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}代理信息:${NC}"
+        echo -e "${YELLOW}${info}${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        save_node_info "$info"
+        return 0
+    else
+        echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
+        return 1
+    fi
+}
+
+# WebSocket 配置函数（仅 ws，无认证）
+configure_websocket() {
+    local port
+    while true; do
+        echo -n -e "${YELLOW}请输入监听端口: ${NC}"
+        read port
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}端口无效${NC}"
+        fi
+    done
+    echo -n -e "${YELLOW}请输入 WebSocket 路径 (默认 /ws): ${NC}"
+    read path
+    [ -z "$path" ] && path="/ws"
+    local scheme="ws"
+    local listen_addr=":${port}"
+    local cmd="$GOST_BIN -L ${scheme}://${listen_addr}?path=${path}"
+    local ip=$(get_local_ip)
+    local info="WebSocket 代理: ws://${ip}:${port}${path} (无认证)"
+    start_gost_generic "$cmd" "$info"
+}
+
+# 链式代理配置函数（本地代理可选认证，远程 WebSocket 无认证）
+configure_chain() {
+    echo -e "${BLUE}请选择本地代理类型:${NC}"
+    echo -e "  ${GREEN}1${NC}) HTTP"
+    echo -e "  ${GREEN}2${NC}) SOCKS5"
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read local_type
+    local local_proto=""
+    case $local_type in
+        1) local_proto="http" ;;
+        2) local_proto="socks5" ;;
+        *) echo -e "${RED}无效选择，使用 HTTP${NC}"; local_proto="http" ;;
+    esac
+    local local_port
+    while true; do
+        echo -n -e "${YELLOW}请输入本地监听端口: ${NC}"
+        read local_port
+        if [[ "$local_port" =~ ^[0-9]+$ ]] && [ "$local_port" -ge 1 ] && [ "$local_port" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}端口无效${NC}"
+        fi
+    done
+    # 本地认证选项
+    echo -n -e "${YELLOW}本地代理是否需要认证？[y/N]: ${NC}"
+    read local_auth
+    local local_user=""
+    local local_pass=""
+    if [[ "$local_auth" =~ ^[Yy]$ ]]; then
+        echo -n -e "${YELLOW}本地用户名 (默认 admin): ${NC}"
+        read local_user
+        [ -z "$local_user" ] && local_user="admin"
+        echo -n -e "${YELLOW}本地密码 (默认 123456): ${NC}"
+        read local_pass
+        [ -z "$local_pass" ] && local_pass="123456"
+    fi
+
+    echo -e "${YELLOW}请输入远程 WebSocket 地址:${NC}"
+    echo -e "  格式: ws://host:port/path 或 wss://host:port/path (无认证)"
+    echo -n -e "${YELLOW}远程地址: ${NC}"
+    read remote_url
+    if [[ -z "$remote_url" ]]; then
+        echo -e "${RED}远程地址不能为空${NC}"
+        return 1
+    fi
+
+    # 构建本地监听参数
+    local local_listen=""
+    if [ -n "$local_user" ]; then
+        local_listen="-L ${local_proto}://${local_user}:${local_pass}@:${local_port}"
+    else
+        local_listen="-L ${local_proto}://:${local_port}"
+    fi
+
+    # 远程转发无认证，直接使用用户输入的地址（不加额外引号）
+    local cmd="$GOST_BIN $local_listen -F $remote_url"
+    local info="链式代理: 本地 ${local_proto}://"
+    if [ -n "$local_user" ]; then
+        info+="${local_user}:${local_pass}@"
+    fi
+    info+=":${local_port} -> 远程 ${remote_url}"
+    start_gost_generic "$cmd" "$info"
+}
+
+# 原有协议启动函数（HTTP/SOCKS5/自适应/Shadowsocks）
+start_gost_legacy() {
     local protocol=$1
     local port=$2
     local auth1=$3
@@ -365,7 +477,6 @@ start_gost() {
     stop_gost
     local cmd=""
     local proxy_url=""
-    local proxy_url_extra=""
     local ip=$(get_local_ip)
     case $protocol in
         1)
@@ -426,6 +537,156 @@ start_gost() {
     fi
 }
 
+# 配置代理主入口
+configure_proxy() {
+    local skip_confirm=$1
+    if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
+        echo -e "${RED}未检测到 GOST，请先安装。${NC}"
+        echo -n -e "${YELLOW}是否现在安装？[y/N]: ${NC}"
+        read ans
+        if [[ "$ans" =~ ^[Yy]$ ]]; then
+            if select_version_to_install; then
+                if [ -f "$GOST_BIN" ]; then
+                    echo -e "${GREEN}安装完成，继续配置代理。${NC}"
+                else
+                    echo -e "${RED}安装失败，无法配置代理。${NC}"
+                    echo -n -e "${GREEN}按任意键返回...${NC}"
+                    read -n 1
+                    return 1
+                fi
+            else
+                echo -e "${RED}安装取消。${NC}"
+                echo -n -e "${GREEN}按任意键返回...${NC}"
+                read -n 1
+                return 1
+            fi
+        else
+            echo -e "${RED}配置取消。${NC}"
+            echo -n -e "${GREEN}按任意键返回...${NC}"
+            read -n 1
+            return 1
+        fi
+    fi
+
+    if [ "$skip_confirm" != "auto" ]; then
+        local installed_ver=$(get_installed_gost_version)
+        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            local pid=$(pgrep -f "$GOST_BIN" | head -1)
+            echo -e "${YELLOW}当前有运行中的进程 (PID: ${pid})，更改配置会先停止进程。${NC}"
+        fi
+        echo -n -e "${YELLOW}是否重新配置代理？[y/N]: ${NC}"
+        read ans
+        if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}配置取消。${NC}"
+            echo -n -e "${GREEN}按任意键返回...${NC}"
+            read -n 1
+            return 1
+        fi
+    fi
+
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}          配置代理${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${YELLOW}请选择代理类型:${NC}"
+    echo -e "  ${GREEN}1${NC}) HTTP"
+    echo -e "  ${GREEN}2${NC}) SOCKS5"
+    echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
+    echo -e "  ${GREEN}4${NC}) Shadowsocks"
+    echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
+    echo -e "  ${GREEN}6${NC}) 链式代理 (本地 HTTP/SOCKS5 -> 远程 WS/WSS)"
+    echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
+    read protocol
+    [[ ! "$protocol" =~ ^[1-6]$ ]] && protocol=3
+
+    case $protocol in
+        1|2|3|4)
+            # 原有协议配置
+            while true; do
+                echo -n -e "${YELLOW}请输入端口: ${NC}"
+                read port
+                if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+                    break
+                else
+                    echo -e "${RED}端口无效${NC}"
+                fi
+            done
+            local username="admin"
+            local password="123456"
+            local method="aes-256-gcm"
+            local node_name=""
+            if [ "$protocol" -eq 4 ]; then
+                echo -e "${BLUE}Shadowsocks 配置${NC}"
+                local gost_ver=$(get_gost_version)
+                local ss_methods=()
+                local ss_method_names=()
+                if version_ge "$gost_ver" "2.8.0"; then
+                    if version_ge "$gost_ver" "3.1.0"; then
+                        ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
+                        ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
+                        echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
+                    else
+                        ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
+                        ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
+                        echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
+                    fi
+                else
+                    echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。请升级到 v2.8+。${NC}"
+                    echo -n -e "${GREEN}按任意键返回...${NC}"
+                    read -n 1
+                    return 1
+                fi
+                echo -e "${YELLOW}请选择加密方式:${NC}"
+                for i in "${!ss_method_names[@]}"; do
+                    echo "  $((i+1))) ${ss_method_names[$i]}"
+                done
+                echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}] (默认 1): ${NC}"
+                read method_choice
+                if [[ -z "$method_choice" ]]; then
+                    method_choice=1
+                fi
+                if [[ "$method_choice" -ge 1 ]] && [[ "$method_choice" -le ${#ss_methods[@]} ]]; then
+                    method="${ss_methods[$((method_choice-1))]}"
+                else
+                    echo -e "${RED}无效选择，使用默认 aes-256-gcm${NC}"
+                    method="aes-256-gcm"
+                fi
+                echo -e "${GREEN}已选择加密方式: ${method}${NC}"
+                echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
+                read input_pass
+                [ -n "$input_pass" ] && password="$input_pass"
+                echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
+                read input_name
+                [ -n "$input_name" ] && node_name="$input_name" || node_name="GOST-SS"
+                start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name"
+            else
+                echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
+                echo -n -e "${YELLOW}账号 [admin]: ${NC}"
+                read input_user
+                [ -n "$input_user" ] && username="$input_user"
+                echo -n -e "${YELLOW}密码 [123456]: ${NC}"
+                read input_pass
+                [ -n "$input_pass" ] && password="$input_pass"
+                start_gost_legacy "$protocol" "$port" "$username" "$password"
+            fi
+            ;;
+        5)
+            configure_websocket
+            ;;
+        6)
+            configure_chain
+            ;;
+    esac
+
+    echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
+    read auto_start
+    if [[ "$auto_start" =~ ^[Yy]$ ]]; then
+        enable_autostart
+    fi
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
+}
+
 # 开启自启
 enable_autostart() {
     local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
@@ -439,7 +700,7 @@ fi
 if ! pgrep -f "\$GOST_DIR/gost" > /dev/null; then
     if [ -f "start_cmd.txt" ]; then
         cmd=\$(cat start_cmd.txt)
-        nohup \$cmd > gost.log 2>&1 &
+        eval "nohup \$cmd > gost.log 2>&1 &"
         echo \$! > gost.pid
     fi
 fi
@@ -481,153 +742,6 @@ version_ge() {
     local v1=$1
     local v2=$2
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
-}
-
-# 配置代理流程（接受一个可选参数：auto 表示跳过确认步骤）
-configure_proxy() {
-    local skip_confirm=$1
-    # 如果未安装，引导安装
-    if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
-        echo -e "${RED}未检测到 GOST，请先安装。${NC}"
-        echo -n -e "${YELLOW}是否现在安装？[y/N]: ${NC}"
-        read ans
-        if [[ "$ans" =~ ^[Yy]$ ]]; then
-            if select_version_to_install; then
-                if [ -f "$GOST_BIN" ]; then
-                    echo -e "${GREEN}安装完成，继续配置代理。${NC}"
-                else
-                    echo -e "${RED}安装失败，无法配置代理。${NC}"
-                    echo -n -e "${GREEN}按任意键返回...${NC}"
-                    read -n 1
-                    return 1
-                fi
-            else
-                echo -e "${RED}安装取消。${NC}"
-                echo -n -e "${GREEN}按任意键返回...${NC}"
-                read -n 1
-                return 1
-            fi
-        else
-            echo -e "${RED}配置取消。${NC}"
-            echo -n -e "${GREEN}按任意键返回...${NC}"
-            read -n 1
-            return 1
-        fi
-    fi
-
-    # 已安装，询问是否重新配置（如果是 auto 模式则跳过询问）
-    if [ "$skip_confirm" != "auto" ]; then
-        local installed_ver=$(get_installed_gost_version)
-        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
-        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-            local pid=$(pgrep -f "$GOST_BIN" | head -1)
-            echo -e "${YELLOW}当前有运行中的进程 (PID: ${pid})，更改配置会先停止进程。${NC}"
-        fi
-        echo -n -e "${YELLOW}是否重新配置代理？[y/N]: ${NC}"
-        read ans
-        if [[ ! "$ans" =~ ^[Yy]$ ]]; then
-            echo -e "${RED}配置取消。${NC}"
-            echo -n -e "${GREEN}按任意键返回...${NC}"
-            read -n 1
-            return 1
-        fi
-    fi
-
-    # 开始配置端口、协议等
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}          配置代理${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    while true; do
-        echo -n -e "${YELLOW}请输入端口: ${NC}"
-        read port
-        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-            break
-        else
-            echo -e "${RED}端口无效${NC}"
-        fi
-    done
-    echo -e "${BLUE}请选择协议:${NC}"
-    echo -e "  ${GREEN}1${NC}) HTTP"
-    echo -e "  ${GREEN}2${NC}) SOCKS5"
-    echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
-    echo -e "  ${GREEN}4${NC}) Shadowsocks"
-    echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
-    read protocol
-    [[ ! "$protocol" =~ ^[1-4]$ ]] && protocol=3
-
-    local username="admin"
-    local password="123456"
-    local method="aes-256-gcm"
-    local node_name=""
-
-    if [ "$protocol" -eq 4 ]; then
-        echo -e "${BLUE}Shadowsocks 配置${NC}"
-        local gost_ver=$(get_gost_version)
-        local ss_methods=()
-        local ss_method_names=()
-        
-        if version_ge "$gost_ver" "2.8.0"; then
-            if version_ge "$gost_ver" "3.1.0"; then
-                ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
-                ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
-                echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
-            else
-                ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
-                ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
-                echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
-            fi
-        else
-            echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。请升级到 v2.8+。${NC}"
-            echo -n -e "${GREEN}按任意键返回...${NC}"
-            read -n 1
-            return 1
-        fi
-        
-        echo -e "${YELLOW}请选择加密方式:${NC}"
-        for i in "${!ss_method_names[@]}"; do
-            echo "  $((i+1))) ${ss_method_names[$i]}"
-        done
-        echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}] (默认 1): ${NC}"
-        read method_choice
-        if [[ -z "$method_choice" ]]; then
-            method_choice=1
-        fi
-        if [[ "$method_choice" -ge 1 ]] && [[ "$method_choice" -le ${#ss_methods[@]} ]]; then
-            method="${ss_methods[$((method_choice-1))]}"
-        else
-            echo -e "${RED}无效选择，使用默认 aes-256-gcm${NC}"
-            method="aes-256-gcm"
-        fi
-        echo -e "${GREEN}已选择加密方式: ${method}${NC}"
-        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
-        echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
-        read input_name
-        if [ -n "$input_name" ]; then
-            node_name="$input_name"
-        else
-            node_name="GOST-SS"
-        fi
-        start_gost "$protocol" "$port" "$method" "$password" "$node_name"
-    else
-        echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
-        echo -n -e "${YELLOW}账号 [admin]: ${NC}"
-        read input_user
-        [ -n "$input_user" ] && username="$input_user"
-        echo -n -e "${YELLOW}密码 [123456]: ${NC}"
-        read input_pass
-        [ -n "$input_pass" ] && password="$input_pass"
-        start_gost "$protocol" "$port" "$username" "$password"
-    fi
-
-    echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
-    read auto_start
-    if [[ "$auto_start" =~ ^[Yy]$ ]]; then
-        enable_autostart
-    fi
-    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
-    read -n 1
 }
 
 # 显示状态
@@ -672,7 +786,7 @@ show_sub() {
     read -n 1
 }
 
-# 更新脚本（失败时退出）
+# 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          更新脚本${NC}"
@@ -741,11 +855,11 @@ main() {
                        echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
                        read config_now
                        if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
-                           configure_proxy "auto"   # 自动模式，跳过二次确认
+                           configure_proxy "auto"
                        fi
                    fi
                fi ;;
-            2) configure_proxy ;;   # 正常模式，会询问是否重新配置
+            2) configure_proxy ;;
             3) show_status ;;
             4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             5) update_script ;;
