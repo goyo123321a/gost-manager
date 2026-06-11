@@ -550,7 +550,7 @@ configure_ssh() {
     start_gost_generic "$cmd" "$info"
 }
 
-# 链式代理配置函数（支持 WebSocket 和 SSH）
+# 链式代理配置函数（支持 WebSocket 和 SSH，确保询问 DNS）
 configure_chain() {
     echo -e "${BLUE}请选择本地代理类型:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
@@ -615,11 +615,27 @@ configure_chain() {
                 echo -e "${RED}远程地址不能为空${NC}"
                 return 1
             fi
-            # 为远程转发配置 DNS
-            local remote_dns_param=$(ask_dns)
+            # 询问是否为远程转发配置 DNS（关键步骤）
+            echo -e "${YELLOW}是否配置自定义 DNS 解析（用于解析远程域名）？[y/N]: ${NC}"
+            read remote_dns_choice
+            local remote_dns_param=""
+            if [[ "$remote_dns_choice" =~ ^[Yy]$ ]]; then
+                echo -e "${YELLOW}请输入 DNS 地址 (支持格式示例):${NC}"
+                echo -e "  UDP: 8.8.8.8:53 或 udp://8.8.8.8:53"
+                echo -e "  TCP: tcp://8.8.8.8:53"
+                echo -e "  DoH: https://1.1.1.1/dns-query"
+                echo -e "  DoT: tls://1.1.1.1:853"
+                echo -n -e "${YELLOW}请输入 DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+                read remote_dns_addr
+                if [ -z "$remote_dns_addr" ]; then
+                    remote_dns_addr="https://1.1.1.1/dns-query"
+                fi
+                remote_dns_addr=$(echo "$remote_dns_addr" | xargs)
+                remote_dns_param="?dns=${remote_dns_addr}"
+            fi
+            # 将 DNS 参数正确附加到远程 URL
             if [ -n "$remote_dns_param" ]; then
-                # remote_dns_param 格式为 "?dns=..."，需要将 ? 替换为 & 并附加到已有查询参数后
-                local dns_value="${remote_dns_param#?}"
+                local dns_value="${remote_dns_param#?}"   # 去掉开头的 ?
                 if [[ "$remote_url" == *"?"* ]]; then
                     remote_url="${remote_url}&${dns_value}"
                 else
