@@ -379,102 +379,57 @@ start_gost_generic() {
     fi
 }
 
-# 询问 DNS 配置，返回 dns 参数字符串（如 "?dns=..." 或 ""）
-ask_dns() {
-    echo -n -e "${YELLOW}是否配置自定义 DNS 解析？[y/N]: ${NC}"
-    read dns_choice
-    if [[ ! "$dns_choice" =~ ^[Yy]$ ]]; then
+# 询问用户是否配置 DNS 解析参数，返回构造好的 "&dns=服务器" 字符串或空字符串
+get_dns_param() {
+    echo -n -e "${YELLOW}是否自定义 DNS 解析（用于解析远程地址）？[y/N]: ${NC}"
+    read use_dns
+    if [[ ! "$use_dns" =~ ^[Yy]$ ]]; then
         echo ""
         return
     fi
-    echo -e "${YELLOW}请输入 DNS 地址 (支持格式示例):${NC}"
-    echo -e "  UDP: 8.8.8.8:53 或 udp://8.8.8.8:53"
-    echo -e "  TCP: tcp://8.8.8.8:53"
-    echo -e "  DoH: https://1.1.1.1/dns-query"
-    echo -e "  DoT: tls://1.1.1.1:853"
-    echo -n -e "${YELLOW}请输入 DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
-    read dns_addr
-    if [ -z "$dns_addr" ]; then
-        dns_addr="https://1.1.1.1/dns-query"
-    fi
-    # 去除可能的前后空格
-    dns_addr=$(echo "$dns_addr" | xargs)
-    echo "?dns=${dns_addr}"
-}
-
-# 原有协议启动函数（HTTP/SOCKS5/自适应/Shadowsocks）增加 DNS 参数
-start_gost_legacy() {
-    local protocol=$1
-    local port=$2
-    local auth1=$3
-    local auth2=$4
-    local name=$5
-    local dns_param=$6   # 类似 "?dns=..." 或空字符串
-    cd "$GOST_DIR" || return 1
-    stop_gost
-    local cmd=""
-    local proxy_url=""
-    local ip=$(get_local_ip)
-    case $protocol in
+    echo -e "${YELLOW}请选择 DNS 协议类型:${NC}"
+    echo -e "  ${GREEN}1${NC}) UDP DNS (例如: 8.8.8.8:53)"
+    echo -e "  ${GREEN}2${NC}) TCP DNS (例如: 8.8.8.8:53)"
+    echo -e "  ${GREEN}3${NC}) DoH (DNS over HTTPS) (例如: https://1.1.1.1/dns-query)"
+    echo -e "  ${GREEN}4${NC}) DoT (DNS over TLS) (例如: tls://1.1.1.1:853)"
+    echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
+    read dns_proto
+    local dns_server=""
+    case $dns_proto in
         1)
-            cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}${dns_param}"
-            proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
-            echo -e "${GREEN}启动 HTTP 代理...${NC}"
-            save_node_info "$proxy_url"
+            echo -n -e "${YELLOW}请输入 UDP DNS 服务器地址 (默认 8.8.8.8:53): ${NC}"
+            read dns_server
+            [ -z "$dns_server" ] && dns_server="8.8.8.8:53"
+            dns_server="udp://${dns_server}"
             ;;
         2)
-            cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}${dns_param}"
-            proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
-            echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
-            save_node_info "$proxy_url"
+            echo -n -e "${YELLOW}请输入 TCP DNS 服务器地址 (默认 8.8.8.8:53): ${NC}"
+            read dns_server
+            [ -z "$dns_server" ] && dns_server="8.8.8.8:53"
+            dns_server="tcp://${dns_server}"
             ;;
         3)
-            cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}${dns_param}"
-            proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
-            echo -e "${GREEN}启动自适应代理...${NC}"
-            save_node_info "$proxy_url"
+            echo -n -e "${YELLOW}请输入 DoH 服务器地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+            read dns_server
+            [ -z "$dns_server" ] && dns_server="https://1.1.1.1/dns-query"
+            # DoH 已经是完整 URL，不需要加前缀
             ;;
         4)
-            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${dns_param}"
-            ss_link="${auth1}:${auth2}@${ip}:${port}"
-            if command -v base64 >/dev/null 2>&1; then
-                ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
-            else
-                ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
-            fi
-            if [ -n "$name" ]; then
-                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${name}"
-                proxy_url_extra="ss://${ss_base64}#${name}"
-            else
-                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
-                proxy_url_extra="ss://${ss_base64}"
-            fi
-            echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
-            save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
+            echo -n -e "${YELLOW}请输入 DoT 服务器地址 (默认 tls://1.1.1.1:853): ${NC}"
+            read dns_server
+            [ -z "$dns_server" ] && dns_server="tls://1.1.1.1:853"
+            ;;
+        *)
+            echo -e "${RED}无效选择，不使用自定义 DNS。${NC}"
+            echo ""
+            return
             ;;
     esac
-    nohup $cmd > "$GOST_LOG" 2>&1 &
-    local pid=$!
-    echo $pid > "$GOST_PID_FILE"
-    sleep 2
-    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ 代理运行中 (PID: $pid)${NC}"
-        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${GREEN}代理链接:${NC}"
-        echo -e "${YELLOW}${proxy_url}${NC}"
-        if [ -n "$proxy_url_extra" ]; then
-            echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
-            echo -e "${YELLOW}${proxy_url_extra}${NC}"
-        fi
-        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        return 0
-    else
-        echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
-        return 1
-    fi
+    # 对于 DoH，直接使用用户输入的字符串；其他已带协议前缀
+    echo "&dns=${dns_server}"
 }
 
-# WebSocket 配置函数（修正 DNS 参数拼接方式）
+# WebSocket 配置函数（仅 ws，无认证，支持 DNS）
 configure_websocket() {
     local port
     while true; do
@@ -489,31 +444,24 @@ configure_websocket() {
     echo -n -e "${YELLOW}请输入 WebSocket 路径 (默认 /ws): ${NC}"
     read path
     [ -z "$path" ] && path="/ws"
-
-    local dns_param=$(ask_dns)
+    local dns_param=$(get_dns_param)
     local scheme="ws"
     local listen_addr=":${port}"
-    local base_url="${scheme}://${listen_addr}?path=${path}"
-    if [ -n "$dns_param" ]; then
-        # dns_param 格式为 "?dns=..."，需要将开头的 ? 替换为 & 后附加
-        dns_param="${dns_param/?#/&}"
-        base_url="${base_url}${dns_param}"
-    fi
-    local cmd="$GOST_BIN -L \"$base_url\""
+    local cmd="$GOST_BIN -L ${scheme}://${listen_addr}?path=${path}${dns_param}"
     local ip=$(get_local_ip)
     local info="WebSocket 代理: ws://${ip}:${port}${path}"
     if [ -n "$dns_param" ]; then
-        info="${info} (自定义 DNS)"
+        info="${info} (DNS: ${dns_param#&dns=})"
     fi
     start_gost_generic "$cmd" "$info"
 }
 
-# SSH 端口转发配置函数
+# SSH 端口转发配置函数（接收三个参数）
 configure_ssh() {
-    local local_listen="$1"
-    local local_proto="$2"
-    local local_listen_arg="$3"
-
+    local local_listen="$1"          # 完整的 -L 参数，如 "-L http://:8080"
+    local local_proto="$2"           # 本地代理类型，如 "http" 或 "socks5"
+    local local_listen_arg="$3"      # 本地监听描述，如 ":8080" 或 "user:pass@:8080"
+    
     echo -e "${YELLOW}--- SSH 端口转发配置 ---${NC}"
     echo -n -e "${YELLOW}请输入 SSH 服务器地址: ${NC}"
     read ssh_host
@@ -545,12 +493,12 @@ configure_ssh() {
         ssh_auth="${ssh_user}"
     fi
     local forward_url="ssh://${ssh_auth}@${ssh_host}:${ssh_port}"
-    local cmd="$GOST_BIN $local_listen -F \"$forward_url\""
+    local cmd="$GOST_BIN $local_listen -F $forward_url"
     local info="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 SSH ssh://${ssh_user}@${ssh_host}:${ssh_port}"
     start_gost_generic "$cmd" "$info"
 }
 
-# 链式代理配置函数（支持 WebSocket 和 SSH，确保询问 DNS）
+# 链式代理配置函数（本地代理可选认证，远程支持 WebSocket 或 SSH）
 configure_chain() {
     echo -e "${BLUE}请选择本地代理类型:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
@@ -587,15 +535,14 @@ configure_chain() {
         [ -z "$local_pass" ] && local_pass="123456"
     fi
 
-    # 询问是否为本地代理配置 DNS
-    local local_dns_param=$(ask_dns)
+    # 构建本地监听参数和显示字符串
     local local_listen=""
     local local_listen_arg=""
     if [ -n "$local_user" ]; then
-        local_listen="-L ${local_proto}://${local_user}:${local_pass}@:${local_port}${local_dns_param}"
+        local_listen="-L ${local_proto}://${local_user}:${local_pass}@:${local_port}"
         local_listen_arg="${local_user}:${local_pass}@:${local_port}"
     else
-        local_listen="-L ${local_proto}://:${local_port}${local_dns_param}"
+        local_listen="-L ${local_proto}://:${local_port}"
         local_listen_arg=":${local_port}"
     fi
 
@@ -615,34 +562,17 @@ configure_chain() {
                 echo -e "${RED}远程地址不能为空${NC}"
                 return 1
             fi
-            # 询问是否为远程转发配置 DNS（关键步骤）
-            echo -e "${YELLOW}是否配置自定义 DNS 解析（用于解析远程域名）？[y/N]: ${NC}"
-            read remote_dns_choice
-            local remote_dns_param=""
-            if [[ "$remote_dns_choice" =~ ^[Yy]$ ]]; then
-                echo -e "${YELLOW}请输入 DNS 地址 (支持格式示例):${NC}"
-                echo -e "  UDP: 8.8.8.8:53 或 udp://8.8.8.8:53"
-                echo -e "  TCP: tcp://8.8.8.8:53"
-                echo -e "  DoH: https://1.1.1.1/dns-query"
-                echo -e "  DoT: tls://1.1.1.1:853"
-                echo -n -e "${YELLOW}请输入 DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
-                read remote_dns_addr
-                if [ -z "$remote_dns_addr" ]; then
-                    remote_dns_addr="https://1.1.1.1/dns-query"
-                fi
-                remote_dns_addr=$(echo "$remote_dns_addr" | xargs)
-                remote_dns_param="?dns=${remote_dns_addr}"
-            fi
-            # 将 DNS 参数正确附加到远程 URL
-            if [ -n "$remote_dns_param" ]; then
-                local dns_value="${remote_dns_param#?}"   # 去掉开头的 ?
+            # 询问 DNS 参数并附加到远程 URL
+            local dns_param=$(get_dns_param)
+            if [ -n "$dns_param" ]; then
+                # 如果原 URL 已经包含 '?'，则用 '&' 连接，否则用 '?' 连接并去掉 dns_param 开头的 '&'
                 if [[ "$remote_url" == *"?"* ]]; then
-                    remote_url="${remote_url}&${dns_value}"
+                    remote_url="${remote_url}${dns_param}"
                 else
-                    remote_url="${remote_url}?${dns_value}"
+                    remote_url="${remote_url}?${dns_param#&}"
                 fi
             fi
-            local cmd="$GOST_BIN $local_listen -F \"$remote_url\""
+            local cmd="$GOST_BIN $local_listen -F $remote_url"
             local info="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 ${remote_url}"
             start_gost_generic "$cmd" "$info"
             ;;
@@ -654,6 +584,77 @@ configure_chain() {
             return 1
             ;;
     esac
+}
+
+# 原有协议启动函数（HTTP/SOCKS5/自适应/Shadowsocks）
+start_gost_legacy() {
+    local protocol=$1
+    local port=$2
+    local auth1=$3
+    local auth2=$4
+    local name=$5
+    cd "$GOST_DIR" || return 1
+    stop_gost
+    local cmd=""
+    local proxy_url=""
+    local ip=$(get_local_ip)
+    case $protocol in
+        1)
+            cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
+            proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
+            echo -e "${GREEN}启动 HTTP 代理...${NC}"
+            save_node_info "$proxy_url"
+            ;;
+        2)
+            cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
+            proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
+            echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
+            save_node_info "$proxy_url"
+            ;;
+        3)
+            cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
+            proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
+            echo -e "${GREEN}启动自适应代理...${NC}"
+            save_node_info "$proxy_url"
+            ;;
+        4)
+            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+            ss_link="${auth1}:${auth2}@${ip}:${port}"
+            if command -v base64 >/dev/null 2>&1; then
+                ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
+            else
+                ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
+            fi
+            if [ -n "$name" ]; then
+                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${name}"
+                proxy_url_extra="ss://${ss_base64}#${name}"
+            else
+                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
+                proxy_url_extra="ss://${ss_base64}"
+            fi
+            echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
+            save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
+            ;;
+    esac
+    nohup $cmd > "$GOST_LOG" 2>&1 &
+    local pid=$!
+    echo $pid > "$GOST_PID_FILE"
+    sleep 2
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ 代理运行中 (PID: $pid)${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}代理链接:${NC}"
+        echo -e "${YELLOW}${proxy_url}${NC}"
+        if [ -n "$proxy_url_extra" ]; then
+            echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
+            echo -e "${YELLOW}${proxy_url_extra}${NC}"
+        fi
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        return 0
+    else
+        echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
+        return 1
+    fi
 }
 
 # 配置代理主入口
@@ -720,6 +721,7 @@ configure_proxy() {
 
     case $protocol in
         1|2|3|4)
+            # 原有协议配置
             while true; do
                 echo -n -e "${YELLOW}请输入端口: ${NC}"
                 read port
@@ -733,8 +735,6 @@ configure_proxy() {
             local password="123456"
             local method="aes-256-gcm"
             local node_name=""
-            # 询问 DNS 配置
-            local dns_param=$(ask_dns)
             if [ "$protocol" -eq 4 ]; then
                 echo -e "${BLUE}Shadowsocks 配置${NC}"
                 local gost_ver=$(get_gost_version)
@@ -778,7 +778,7 @@ configure_proxy() {
                 echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
                 read input_name
                 [ -n "$input_name" ] && node_name="$input_name" || node_name="GOST-SS"
-                start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name" "$dns_param"
+                start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name"
             else
                 echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
                 echo -n -e "${YELLOW}账号 [admin]: ${NC}"
@@ -787,7 +787,7 @@ configure_proxy() {
                 echo -n -e "${YELLOW}密码 [123456]: ${NC}"
                 read input_pass
                 [ -n "$input_pass" ] && password="$input_pass"
-                start_gost_legacy "$protocol" "$port" "$username" "$password" "" "$dns_param"
+                start_gost_legacy "$protocol" "$port" "$username" "$password"
             fi
             ;;
         5)
