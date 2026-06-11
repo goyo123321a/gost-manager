@@ -354,14 +354,18 @@ save_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# 通用启动函数（使用 eval 确保参数正确）
+# 通用启动函数（增加手动日志记录）
 start_gost_generic() {
     local cmd="$1"
     local info="$2"
     cd "$GOST_DIR" || return 1
     stop_gost
     echo -e "${GREEN}启动代理...${NC}"
-    eval "nohup $cmd > \"$GOST_LOG\" 2>&1 &"
+    # 先清空日志文件并写入启动标记（避免追加混乱，也可选择追加，这里清空）
+    echo "=== GOST 代理启动于 $(date) ===" > "$GOST_LOG"
+    echo "命令: $cmd" >> "$GOST_LOG"
+    echo "信息: $info" >> "$GOST_LOG"
+    eval "nohup $cmd >> \"$GOST_LOG\" 2>&1 &"
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
     sleep 2
@@ -372,6 +376,7 @@ start_gost_generic() {
         echo -e "${YELLOW}${info}${NC}"
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         save_node_info "$info"
+        echo "代理进程 PID: $pid, 启动成功" >> "$GOST_LOG"
         return 0
     else
         echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
@@ -655,7 +660,11 @@ start_gost_legacy() {
             save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
             ;;
     esac
-    nohup $cmd > "$GOST_LOG" 2>&1 &
+    # 同样记录启动日志
+    echo "=== GOST 代理启动于 $(date) ===" > "$GOST_LOG"
+    echo "命令: $cmd" >> "$GOST_LOG"
+    echo "信息: $proxy_url" >> "$GOST_LOG"
+    nohup $cmd >> "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
     sleep 2
@@ -669,6 +678,7 @@ start_gost_legacy() {
             echo -e "${YELLOW}${proxy_url_extra}${NC}"
         fi
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo "代理进程 PID: $pid, 启动成功" >> "$GOST_LOG"
         return 0
     else
         echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
@@ -858,7 +868,7 @@ fi
 if ! pgrep -f "\$GOST_DIR/gost" > /dev/null; then
     if [ -f "start_cmd.txt" ]; then
         cmd=\$(cat start_cmd.txt)
-        eval "nohup \$cmd > gost.log 2>&1 &"
+        eval "nohup \$cmd >> gost.log 2>&1 &"
         echo \$! > gost.pid
     fi
 fi
