@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 
 # ============================================
-# GOST 一键管理脚本（Termux 最终修复版 + root 兼容）
-# 支持单进程多服务 / 多进程，含开机自启、安全加固
+# GOST 一键管理脚本（最终版）
+# 支持 HTTP/SOCKS5/自适应/SS/WS/链式代理，集成 DNS 解析，默认 DoH
 # ============================================
 
-# 错误时退出并显示行号
 set -euo pipefail
 trap 'echo "错误发生在第 $LINENO 行，命令: $BASH_COMMAND"' ERR
 
@@ -45,7 +44,6 @@ setup_workspace() {
     local CURRENT_USER WORK_HOME NORMAL_USER
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
-        # 安全地获取普通用户：优先 SUDO_USER，然后 USER，最后从 passwd 查找
         if [[ -n "${SUDO_USER:-}" ]]; then
             NORMAL_USER="$SUDO_USER"
         elif [[ -n "${USER:-}" ]] && [[ "$USER" != "root" ]]; then
@@ -298,9 +296,15 @@ restart_gost_single() {
         cd "$GOST_DIR"
         nohup $full_cmd > "$GOST_LOG" 2>&1 &
         local pid=$!
-        echo $pid > "$GOST_PID_FILE"
-        echo -e "${GREEN}单进程模式已启动，PID: $pid${NC}"
-        return 0
+        sleep 1
+        if kill -0 "$pid" 2>/dev/null; then
+            echo $pid > "$GOST_PID_FILE"
+            echo -e "${GREEN}单进程模式已启动，PID: $pid${NC}"
+            return 0
+        else
+            echo -e "${RED}启动失败，请检查日志${NC}"
+            return 1
+        fi
     else
         echo -e "${RED}没有找到启动命令，请先配置代理或添加服务。${NC}"
         return 1
@@ -351,12 +355,34 @@ replace_node_info() {
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# ========== 参数收集函数（针对 Termux 优化） ==========
+# ========== 参数收集函数 ==========
 safe_read() {
     local prompt="$1"
     local var_name="$2"
     printf "%b" "$prompt" >&2
     IFS= read -r "$var_name"
+}
+
+collect_dns_option() {
+    echo -n -e "${YELLOW}是否自定义 DNS 解析？[y/N]: ${NC}"
+    read -r use_dns
+    local dns_str=""
+    if [[ "$use_dns" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}请输入 DNS 服务器列表，多个用逗号分隔。支持以下格式：${NC}"
+        echo -e "  ${GREEN}UDP 标准:${NC} 8.8.8.8 或 8.8.8.8:53/udp"
+        echo -e "  ${GREEN}TCP 查询:${NC} 1.1.1.1:53/tcp"
+        echo -e "  ${GREEN}DNS over TLS (DoT):${NC} 1.1.1.1:853/tls"
+        echo -e "  ${GREEN}DNS over HTTPS (DoH):${NC} https://dns.google/dns-query 或 https://cloudflare-dns.com/dns-query"
+        echo -e "  ${GREEN}代理链 UDP:${NC} 8.8.8.8/udp-chain (需配合 -F)"
+        echo -e "  ${GREEN}代理链 TCP:${NC} 1.1.1.1/udp-chain"
+        echo -n -e "${YELLOW}请输入 (默认 https://1.1.1.1/dns-query): ${NC}"
+        read -r dns_input
+        if [ -z "$dns_input" ]; then
+            dns_input="https://1.1.1.1/dns-query"
+        fi
+        dns_str="?dns=${dns_input}"
+    fi
+    echo "$dns_str"
 }
 
 collect_http_params() {
@@ -368,9 +394,11 @@ collect_http_params() {
     done
     safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
     safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
+    local dns_opt
+    dns_opt=$(collect_dns_option)
     local ip
     ip=$(get_local_ip)
-    local cmd="-L http://${user}:${pass}@:${port}"
+    local cmd="-L http://${user}:${pass}@:${port}${dns_opt}"
     local desc="HTTP 代理: http://${user}:${pass}@${ip}:${port}"
     echo "$cmd|||$desc"
 }
@@ -384,9 +412,11 @@ collect_socks5_params() {
     done
     safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
     safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
+    local dns_opt
+    dns_opt=$(collect_dns_option)
     local ip
     ip=$(get_local_ip)
-    local cmd="-L socks5://${user}:${pass}@:${port}"
+    local cmd="-L socks5://${user}:${pass}@:${port}${dns_opt}"
     local desc="SOCKS5 代理: socks5://${user}:${pass}@${ip}:${port}"
     echo "$cmd|||$desc"
 }
@@ -400,9 +430,11 @@ collect_adapt_params() {
     done
     safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
     safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
+    local dns_opt
+    dns_opt=$(collect_dns_option)
     local ip
     ip=$(get_local_ip)
-    local cmd="-L ${user}:${pass}@:${port}"
+    local cmd="-L ${user}:${pass}@:${port}${dns_opt}"
     local desc="自适应代理: http://${user}:${pass}@${ip}:${port} / socks5://${user}:${pass}@${ip}:${port}"
     echo "$cmd|||$desc"
 }
@@ -417,9 +449,11 @@ collect_ss_params() {
     safe_read "${YELLOW}加密方式 (默认 aes-256-gcm): ${NC}" method; method=${method:-aes-256-gcm}
     safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
     safe_read "${YELLOW}节点名称 (可选): ${NC}" name
+    local dns_opt
+    dns_opt=$(collect_dns_option)
     local ip
     ip=$(get_local_ip)
-    local cmd="-L ss://${method}:${pass}@:${port}"
+    local cmd="-L ss://${method}:${pass}@:${port}${dns_opt}"
     local desc="Shadowsocks 代理: ss://${method}:${pass}@${ip}:${port}"
     [ -n "$name" ] && desc="${desc}#${name}"
     echo "$cmd|||$desc"
@@ -433,10 +467,17 @@ collect_ws_params() {
         echo -e "${RED}端口无效${NC}"
     done
     safe_read "${YELLOW}WebSocket 路径 (默认 /ws): ${NC}" path; path=${path:-/ws}
+    local dns_opt
+    dns_opt=$(collect_dns_option)
     local ip
     ip=$(get_local_ip)
-    local cmd="-L ws://:${port}?path=${path}"
-    local desc="WebSocket 代理: ws://${ip}:${port}${path} (无认证)"
+    local base_url="ws://:${port}?path=${path}"
+    if [[ -n "$dns_opt" ]]; then
+        local dns_part="${dns_opt#?}"
+        base_url="${base_url}&${dns_part}"
+    fi
+    local cmd="-L \"${base_url}\""
+    local desc="WebSocket 代理: ws://${ip}:${port}${path}"
     echo "$cmd|||$desc"
 }
 
@@ -479,7 +520,16 @@ collect_chain_params() {
         while [ -z "$remote_url" ]; do
             safe_read "${RED}地址不能为空${NC}" remote_url
         done
-        local cmd="$local_listen -F $remote_url"
+        local dns_opt_remote
+        dns_opt_remote=$(collect_dns_option)
+        if [[ -n "$dns_opt_remote" ]]; then
+            if [[ "$remote_url" == *"?"* ]]; then
+                remote_url="${remote_url}&${dns_opt_remote#?}"
+            else
+                remote_url="${remote_url}${dns_opt_remote}"
+            fi
+        fi
+        local cmd="$local_listen -F \"${remote_url}\""
         local desc="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 ${remote_url}"
         echo "$cmd|||$desc"
     elif [ "$remote_mode" = "2" ]; then
@@ -498,67 +548,18 @@ collect_chain_params() {
             ssh_auth="${ssh_user}"
         fi
         local forward_url="ssh://${ssh_auth}@${ssh_host}:${ssh_port}"
-        local cmd="$local_listen -F $forward_url"
+        local dns_opt_remote
+        dns_opt_remote=$(collect_dns_option)
+        if [[ -n "$dns_opt_remote" ]]; then
+            forward_url="${forward_url}${dns_opt_remote}"
+        fi
+        local cmd="$local_listen -F \"${forward_url}\""
         local desc="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 SSH ssh://${ssh_user}@${ssh_host}:${ssh_port}"
         echo "$cmd|||$desc"
     else
         echo -e "${RED}无效选择${NC}"
         return 1
     fi
-}
-
-url_encode() {
-    local string="$1"
-    local encoded=""
-    local i
-    for ((i=0; i<${#string}; i++)); do
-        local c="${string:$i:1}"
-        case "$c" in
-            [a-zA-Z0-9._~-]) encoded+="$c" ;;
-            *) encoded+=$(printf '%%%02X' "'$c") ;;
-        esac
-    done
-    echo "$encoded"
-}
-
-collect_dns_params() {
-    local port
-    safe_read "${YELLOW}请输入 DNS 监听端口 (默认 5353): ${NC}" port
-    [ -z "$port" ] && port=5353
-    while ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; do
-        safe_read "${RED}端口无效，请重新输入: ${NC}" port
-        [ -z "$port" ] && port=5353
-    done
-    safe_read "${YELLOW}请输入上游 DNS 服务器 (默认 8.8.8.8, 多个用逗号分隔): ${NC}" upstream
-    upstream=${upstream:-8.8.8.8}
-    safe_read "${YELLOW}请输入缓存 TTL (秒，默认 60): ${NC}" ttl
-    ttl=${ttl:-60}
-    local hosts=""
-    safe_read "${YELLOW}是否添加自定义 hosts 映射？[y/N]: ${NC}" add_hosts
-    if [[ "$add_hosts" =~ ^[Yy]$ ]]; then
-        echo -e "${BLUE}请输入域名:IP，每行一条，空行结束:${NC}"
-        while true; do
-            safe_read "> " line
-            [ -z "$line" ] && break
-            if [[ "$line" =~ .+:.* ]]; then
-                local encoded_line
-                encoded_line=$(url_encode "$line")
-                if [ -n "$hosts" ]; then
-                    hosts="${hosts},${encoded_line}"
-                else
-                    hosts="$encoded_line"
-                fi
-            else
-                echo -e "${RED}格式错误，应为 域名:IP${NC}"
-            fi
-        done
-    fi
-    local query="dns=${upstream}&ttl=${ttl}"
-    [ -n "$hosts" ] && query="${query}&hosts=${hosts}"
-    # 关键修复：整个 dns URL 用单引号包裹，防止 ?& 被 shell 解释
-    local cmd="-L 'dns://:${port}?${query}'"
-    local desc="DNS 代理: udp://0.0.0.0:${port} (上游: ${upstream}, TTL: ${ttl})"
-    echo "$cmd|||$desc"
 }
 
 # ========== 配置替换模式 ==========
@@ -573,8 +574,8 @@ configure_proxy() {
     echo -e "  ${GREEN}4${NC}) Shadowsocks"
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
     echo -e "  ${GREEN}6${NC}) 链式代理"
-    echo -e "  ${GREEN}7${NC}) DNS 代理"
-    safe_read "${YELLOW}请输入 [1-7]: ${NC}" ptype
+    echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
+    read -r ptype
     local result=""
     case $ptype in
         1) result=$(collect_http_params) ;;
@@ -583,7 +584,6 @@ configure_proxy() {
         4) result=$(collect_ss_params) ;;
         5) result=$(collect_ws_params) ;;
         6) result=$(collect_chain_params) ;;
-        7) result=$(collect_dns_params) ;;
         *) echo -e "${RED}无效选择${NC}"; return 1 ;;
     esac
     if [ -z "$result" ]; then
@@ -615,8 +615,8 @@ add_service_to_single() {
     echo -e "  ${GREEN}4${NC}) Shadowsocks"
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
     echo -e "  ${GREEN}6${NC}) 链式代理"
-    echo -e "  ${GREEN}7${NC}) DNS 代理"
-    safe_read "${YELLOW}请输入 [1-7]: ${NC}" ptype
+    echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
+    read -r ptype
     local result=""
     case $ptype in
         1) result=$(collect_http_params) ;;
@@ -625,7 +625,6 @@ add_service_to_single() {
         4) result=$(collect_ss_params) ;;
         5) result=$(collect_ws_params) ;;
         6) result=$(collect_chain_params) ;;
-        7) result=$(collect_dns_params) ;;
         *) echo -e "${RED}无效选择${NC}"; return 1 ;;
     esac
     if [ -z "$result" ]; then
@@ -658,8 +657,8 @@ add_service_independent() {
     echo -e "  ${GREEN}4${NC}) Shadowsocks"
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
     echo -e "  ${GREEN}6${NC}) 链式代理"
-    echo -e "  ${GREEN}7${NC}) DNS 代理"
-    safe_read "${YELLOW}请输入 [1-7]: ${NC}" ptype
+    echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
+    read -r ptype
     local result=""
     case $ptype in
         1) result=$(collect_http_params) ;;
@@ -668,7 +667,6 @@ add_service_independent() {
         4) result=$(collect_ss_params) ;;
         5) result=$(collect_ws_params) ;;
         6) result=$(collect_chain_params) ;;
-        7) result=$(collect_dns_params) ;;
         *) echo -e "${RED}无效选择${NC}"; return 1 ;;
     esac
     if [ -z "$result" ]; then
