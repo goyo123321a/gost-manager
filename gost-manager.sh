@@ -394,7 +394,7 @@ build_query_string() {
     fi
 }
 
-# WebSocket 配置函数（支持自定义路径和 DNS）
+# WebSocket 配置函数（支持自定义路径和 DNS，路径可选）
 configure_websocket() {
     local port
     while true; do
@@ -406,29 +406,45 @@ configure_websocket() {
             echo -e "${RED}端口无效${NC}"
         fi
     done
-    echo -n -e "${YELLOW}请输入 WebSocket 路径 (默认 /ws): ${NC}"
-    read path
-    [ -z "$path" ] && path="/ws"
-    
-    # 自定义 DNS 选项
-    local dns=""
-    echo -n -e "${YELLOW}是否使用自定义 DNS (DoH)？[y/N]: ${NC}"
+    echo -e "${YELLOW}请配置 WebSocket 路径（直接回车使用默认 /ws，输入 0 表示不使用路径）:${NC}"
+    echo -n -e "${YELLOW}路径 (默认 /ws, 0=无路径): ${NC}"
+    read path_input
+    local path=""
+    if [ -z "$path_input" ]; then
+        path="/ws"
+    elif [ "$path_input" = "0" ]; then
+        path=""
+    else
+        path="$path_input"
+    fi
+    # DNS 选项
+    local dns_param=""
+    echo -n -e "${YELLOW}是否使用自定义 DNS？[y/N]: ${NC}"
     read use_dns
     if [[ "$use_dns" =~ ^[Yy]$ ]]; then
-        echo -n -e "${YELLOW}请输入 DNS over HTTPS 地址 (例如 https://1.1.1.1/dns-query): ${NC}"
-        read dns
-        if [ -n "$dns" ]; then
-            dns="dns=${dns}"
+        echo -e "${YELLOW}支持格式：${NC}"
+        echo -e "  DoH:   https://1.1.1.1/dns-query"
+        echo -e "  DoT:   tls://1.1.1.1:853"
+        echo -e "  UDP:   udp://8.8.8.8:53"
+        echo -e "  TCP:   tcp://8.8.8.8:53"
+        echo -n -e "${YELLOW}请输入 DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+        read dns_input
+        if [ -z "$dns_input" ]; then
+            dns_input="https://1.1.1.1/dns-query"
         fi
+        dns_param="dns=${dns_input}"
     fi
-    
     local scheme="ws"
     local listen_addr=":${port}"
-    local query=$(build_query_string "path=${path}" "$dns")
+    local params=()
+    [ -n "$path" ] && params+=("path=${path}")
+    [ -n "$dns_param" ] && params+=("$dns_param")
+    local query=$(build_query_string "${params[@]}")
     local cmd="$GOST_BIN -L ${scheme}://${listen_addr}${query}"
     local ip=$(get_local_ip)
-    local info="WebSocket 代理: ws://${ip}:${port}${path}"
-    [ -n "$dns" ] && info="${info} (DNS: ${dns#dns=})"
+    local info="WebSocket 代理: ws://${ip}:${port}"
+    [ -n "$path" ] && info="${info}${path}" || info="${info} (无路径)"
+    [ -n "$dns_param" ] && info="${info} (DNS: ${dns_param#dns=})"
     start_gost_generic "$cmd" "$info"
 }
 
@@ -531,29 +547,46 @@ configure_chain() {
     case $remote_mode in
         1)
             echo -e "${YELLOW}--- WebSocket 远程转发配置 ---${NC}"
-            echo -n -e "${YELLOW}请输入远程 WebSocket 地址 (例如 ws://example.com:8080 或 wss://example.com:443): ${NC}"
+            echo -n -e "${YELLOW}请输入远程 WebSocket 服务器地址 (例如 ws://example.com:8080 或 wss://example.com:443): ${NC}"
             read ws_base
             if [ -z "$ws_base" ]; then
                 echo -e "${RED}地址不能为空${NC}"
                 return 1
             fi
-            echo -n -e "${YELLOW}请输入 WebSocket 路径 (默认 /ws): ${NC}"
-            read ws_path
-            [ -z "$ws_path" ] && ws_path="/ws"
+            echo -e "${YELLOW}请配置 WebSocket 路径（直接回车使用默认 /ws，输入 0 表示不使用路径）:${NC}"
+            echo -n -e "${YELLOW}路径 (默认 /ws, 0=无路径): ${NC}"
+            read path_input
+            local path=""
+            if [ -z "$path_input" ]; then
+                path="/ws"
+            elif [ "$path_input" = "0" ]; then
+                path=""
+            else
+                path="$path_input"
+            fi
             # DNS 选项
-            local dns=""
-            echo -n -e "${YELLOW}是否使用自定义 DNS (DoH)？[y/N]: ${NC}"
+            local dns_param=""
+            echo -n -e "${YELLOW}是否使用自定义 DNS？[y/N]: ${NC}"
             read use_dns
             if [[ "$use_dns" =~ ^[Yy]$ ]]; then
-                echo -n -e "${YELLOW}请输入 DNS over HTTPS 地址 (例如 https://1.1.1.1/dns-query): ${NC}"
-                read dns
-                if [ -n "$dns" ]; then
-                    dns="dns=${dns}"
+                echo -e "${YELLOW}支持格式：${NC}"
+                echo -e "  DoH:   https://1.1.1.1/dns-query"
+                echo -e "  DoT:   tls://1.1.1.1:853"
+                echo -e "  UDP:   udp://8.8.8.8:53"
+                echo -e "  TCP:   tcp://8.8.8.8:53"
+                echo -n -e "${YELLOW}请输入 DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+                read dns_input
+                if [ -z "$dns_input" ]; then
+                    dns_input="https://1.1.1.1/dns-query"
                 fi
+                dns_param="dns=${dns_input}"
             fi
-            local query=$(build_query_string "path=${ws_path}" "$dns")
+            local params=()
+            [ -n "$path" ] && params+=("path=${path}")
+            [ -n "$dns_param" ] && params+=("$dns_param")
+            local query=$(build_query_string "${params[@]}")
             local remote_url="${ws_base}${query}"
-            local cmd="$GOST_BIN $local_listen -F $remote_url"
+            local cmd="$GOST_BIN $local_listen -F \"$remote_url\""
             local info="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 ${remote_url}"
             start_gost_generic "$cmd" "$info"
             ;;
