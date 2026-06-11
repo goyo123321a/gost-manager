@@ -600,13 +600,14 @@ configure_chain() {
     esac
 }
 
-# 原有协议启动函数（HTTP/SOCKS5/自适应/Shadowsocks）
+# 原有协议启动函数（HTTP/SOCKS5/自适应/Shadowsocks），增加 query 参数
 start_gost_legacy() {
     local protocol=$1
     local port=$2
     local auth1=$3
     local auth2=$4
     local name=$5
+    local query=$6   # 新增查询参数（如 ?dns=...）
     cd "$GOST_DIR" || return 1
     stop_gost
     local cmd=""
@@ -614,25 +615,28 @@ start_gost_legacy() {
     local ip=$(get_local_ip)
     case $protocol in
         1)
-            cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}"
+            cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}${query}"
             proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
+            [ -n "$query" ] && proxy_url="${proxy_url} (DNS: ${query#?dns=})"
             echo -e "${GREEN}启动 HTTP 代理...${NC}"
             save_node_info "$proxy_url"
             ;;
         2)
-            cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}"
+            cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}${query}"
             proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
+            [ -n "$query" ] && proxy_url="${proxy_url} (DNS: ${query#?dns=})"
             echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
             save_node_info "$proxy_url"
             ;;
         3)
-            cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}"
+            cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}${query}"
             proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
+            [ -n "$query" ] && proxy_url="${proxy_url} (DNS: ${query#?dns=})"
             echo -e "${GREEN}启动自适应代理...${NC}"
             save_node_info "$proxy_url"
             ;;
         4)
-            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${query}"
             ss_link="${auth1}:${auth2}@${ip}:${port}"
             if command -v base64 >/dev/null 2>&1; then
                 ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
@@ -646,6 +650,7 @@ start_gost_legacy() {
                 proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
                 proxy_url_extra="ss://${ss_base64}"
             fi
+            [ -n "$query" ] && proxy_url="${proxy_url} (DNS: ${query#?dns=})"
             echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
             save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
             ;;
@@ -659,7 +664,7 @@ start_gost_legacy() {
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${GREEN}代理链接:${NC}"
         echo -e "${YELLOW}${proxy_url}${NC}"
-        if [ -n "$proxy_url_extra" ]; then
+        if [ "$protocol" -eq 4 ] && [ -n "$proxy_url_extra" ]; then
             echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
             echo -e "${YELLOW}${proxy_url_extra}${NC}"
         fi
@@ -749,6 +754,25 @@ configure_proxy() {
             local password="123456"
             local method="aes-256-gcm"
             local node_name=""
+            # 自定义 DNS 选项
+            local dns_param=""
+            echo -n -e "${YELLOW}是否使用自定义 DNS？[y/N]: ${NC}"
+            read use_dns
+            if [[ "$use_dns" =~ ^[Yy]$ ]]; then
+                echo -e "${YELLOW}支持格式：${NC}"
+                echo -e "  DoH:   https://1.1.1.1/dns-query"
+                echo -e "  DoT:   tls://1.1.1.1:853"
+                echo -e "  UDP:   udp://8.8.8.8:53"
+                echo -e "  TCP:   tcp://8.8.8.8:53"
+                echo -n -e "${YELLOW}请输入 DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+                read dns_input
+                if [ -z "$dns_input" ]; then
+                    dns_input="https://1.1.1.1/dns-query"
+                fi
+                dns_param="dns=${dns_input}"
+            fi
+            local query=$(build_query_string "$dns_param")
+
             if [ "$protocol" -eq 4 ]; then
                 echo -e "${BLUE}Shadowsocks 配置${NC}"
                 local gost_ver=$(get_gost_version)
@@ -792,7 +816,7 @@ configure_proxy() {
                 echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
                 read input_name
                 [ -n "$input_name" ] && node_name="$input_name" || node_name="GOST-SS"
-                start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name"
+                start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name" "$query"
             else
                 echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
                 echo -n -e "${YELLOW}账号 [admin]: ${NC}"
@@ -801,7 +825,7 @@ configure_proxy() {
                 echo -n -e "${YELLOW}密码 [123456]: ${NC}"
                 read input_pass
                 [ -n "$input_pass" ] && password="$input_pass"
-                start_gost_legacy "$protocol" "$port" "$username" "$password"
+                start_gost_legacy "$protocol" "$port" "$username" "$password" "" "$query"
             fi
             ;;
         5)
