@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
 
-# ============================================
-# GOST 一键管理脚本（最终版）
-# 支持 HTTP/SOCKS5/自适应/SS/WS/链式代理，集成 DNS 解析，默认 DoH
-# ============================================
-
-set -euo pipefail
-trap 'echo "错误发生在第 $LINENO 行，命令: $BASH_COMMAND"' ERR
-
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,23 +7,12 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 全局变量
 SUBFILE="$HOME/sub.txt"
-GOST_DIR=""
-GOST_BIN=""
-GOST_LOG=""
-GOST_PID_FILE=""
-START_CMD_FILE=""
-PID_DIR=""
 
-# ========== 基础函数 ==========
+# 获取本机 IP
 get_local_ip() {
-    local ip
-    if command -v ip >/dev/null 2>&1; then
-        ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
-    elif command -v ifconfig >/dev/null 2>&1; then
-        ip=$(ifconfig 2>/dev/null | grep -o 'inet addr:[0-9.]*' | cut -d: -f2 | grep -v '127.0.0.1' | head -1)
-    else
+    local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
+    if [ -z "$ip" ]; then
         ip=$(hostname -i 2>/dev/null | awk '{print $1}')
     fi
     if [ -z "$ip" ] || [ "$ip" = "127.0.0.1" ]; then
@@ -40,16 +21,16 @@ get_local_ip() {
     echo "$ip"
 }
 
+# 工作目录设置
 setup_workspace() {
-    local CURRENT_USER WORK_HOME NORMAL_USER
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
-        if [[ -n "${SUDO_USER:-}" ]]; then
+        if [[ -n "$SUDO_USER" ]]; then
             NORMAL_USER="$SUDO_USER"
-        elif [[ -n "${USER:-}" ]] && [[ "$USER" != "root" ]]; then
+        elif [[ -n "$USER" ]] && [[ "$USER" != "root" ]]; then
             NORMAL_USER="$USER"
         else
-            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null || true)
+            NORMAL_USER=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd 2>/dev/null)
         fi
         if [[ -n "$NORMAL_USER" ]]; then
             WORK_HOME="/home/$NORMAL_USER"
@@ -67,13 +48,11 @@ setup_workspace() {
     GOST_BIN="$GOST_DIR/gost"
     GOST_LOG="$GOST_DIR/gost.log"
     GOST_PID_FILE="$GOST_DIR/gost.pid"
-    START_CMD_FILE="$GOST_DIR/start_cmd.txt"
-    PID_DIR="$GOST_DIR/pids"
-    mkdir -p "$PID_DIR"
     echo -e "${GREEN}工作目录: ${GOST_DIR}${NC}"
 }
 setup_workspace
 
+# 检测系统和架构
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -92,15 +71,60 @@ detect_os_arch() {
 
 get_installed_gost_version() {
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
-        local ver
-        ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        echo "${ver:-未知版本}"
+        local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        if [ -n "$ver" ]; then
+            echo "$ver"
+        else
+            echo "未知版本"
+        fi
     else
         echo "未安装"
     fi
 }
 
-# ========== 安装函数 ==========
+check_existing_gost() {
+    local installed_ver=$(get_installed_gost_version)
+    if [ "$installed_ver" != "未安装" ]; then
+        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            local pid=$(pgrep -f "$GOST_BIN" | head -1)
+            echo -e "${YELLOW}检测到运行中的进程 (PID: ${pid})${NC}"
+        else
+            echo -e "${YELLOW}没有运行中的 GOST 进程${NC}"
+        fi
+        echo -n -e "${YELLOW}是否覆盖安装新版本？[y/N]: ${NC}"
+        read ans
+        if [[ "$ans" =~ ^[Yy]$ ]]; then
+            if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+                stop_gost
+            fi
+            return 0
+        else
+            echo -e "${RED}取消安装。${NC}"
+            return 1
+        fi
+    else
+        echo -e "${GREEN}未检测到已安装的 GOST。${NC}"
+        return 0
+    fi
+}
+
+stop_gost() {
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        echo -e "${YELLOW}正在停止 GOST 进程...${NC}"
+        pkill -f "$GOST_BIN" 2>/dev/null
+        sleep 1
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            echo -e "${RED}强制停止...${NC}"
+            pkill -9 -f "$GOST_BIN" 2>/dev/null
+        fi
+        echo -e "${GREEN}✓ GOST 进程已停止${NC}"
+    else
+        echo -e "${YELLOW}没有找到运行中的 GOST 进程${NC}"
+    fi
+    [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
+}
+
 version_ge_2_12() {
     local v=$1
     local major=$(echo "$v" | cut -d. -f1)
@@ -112,17 +136,14 @@ version_ge_2_12() {
 
 install_gost_v2() {
     local version=$1
-    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        echo -e "${YELLOW}检测到运行的 GOST 进程，是否停止后再安装？[y/N]${NC}"
-        read -r stop_ans
-        if [[ "$stop_ans" =~ ^[Yy]$ ]]; then
-            stop_all_gost
-        fi
+    if ! check_existing_gost; then
+        return 1
     fi
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v2 ${version}...${NC}"
     cd "$GOST_DIR" || return 1
     rm -f gost gost.tar.gz gost.gz
+
     local downloaded=0
     if version_ge_2_12 "$version"; then
         local tar_url="https://github.com/ginuerzh/gost/releases/download/v${version}/gost_${version}_${os}_${cpu_arch}.tar.gz"
@@ -134,7 +155,9 @@ install_gost_v2() {
             fi
         fi
     fi
+
     if [ $downloaded -eq 0 ]; then
+        echo -e "${YELLOW}      尝试旧格式 .gz...${NC}"
         local gz_urls=(
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-${os}-${cpu_arch}-${version}.gz"
             "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-${cpu_arch}-${version}.gz"
@@ -142,7 +165,7 @@ install_gost_v2() {
         if [[ "$os" == "linux" ]]; then
             case "$cpu_arch" in
                 amd64) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-amd64-${version}.gz") ;;
-                arm64) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz") ;;
+                arm64) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv8-${version}.gz" "https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-arm64-${version}.gz") ;;
                 armv7) gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-armv7-${version}.gz") ;;
                 386)   gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-linux-386-${version}.gz") ;;
             esac
@@ -152,38 +175,42 @@ install_gost_v2() {
             gz_urls+=("https://github.com/ginuerzh/gost/releases/download/v${version}/gost-darwin-${cpu_arch}-${version}.gz")
         fi
         for url in "${gz_urls[@]}"; do
+            echo -e "      尝试: ${url}"
             if wget -q --timeout=15 -O gost.gz "$url" 2>/dev/null || curl -fsSL --connect-timeout 15 "$url" -o gost.gz 2>/dev/null; then
                 if [ -f "gost.gz" ] && [ -s "gost.gz" ] && gunzip -t gost.gz 2>/dev/null; then
                     gunzip -f gost.gz
                     downloaded=1
+                    echo -e "${GREEN}      下载成功${NC}"
                     break
                 fi
             fi
         done
     fi
+
     if [ $downloaded -eq 0 ]; then
-        echo -e "${RED}下载失败${NC}"
-        return 1
+        echo -e "${RED}下载失败，安装终止。${NC}"
+        echo -n -e "${GREEN}按任意键退出...${NC}"
+        read -n 1
+        exit 1
     fi
+
     chmod +x gost
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         echo -e "${GREEN}✓ 安装成功${NC}"
         "$GOST_BIN" -V 2>&1 | head -1
         return 0
     else
-        echo -e "${RED}安装失败${NC}"
-        return 1
+        echo -e "${RED}安装失败，请手动检查。${NC}"
+        echo -n -e "${GREEN}按任意键退出...${NC}"
+        read -n 1
+        exit 1
     fi
 }
 
 install_gost_v3() {
     local version=$1
-    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
-        echo -e "${YELLOW}检测到运行的 GOST 进程，是否停止后再安装？[y/N]${NC}"
-        read -r stop_ans
-        if [[ "$stop_ans" =~ ^[Yy]$ ]]; then
-            stop_all_gost
-        fi
+    if ! check_existing_gost; then
+        return 1
     fi
     mkdir -p "$GOST_DIR"
     echo -e "${YELLOW}[安装] GOST v3 ${version}...${NC}"
@@ -201,28 +228,81 @@ install_gost_v3() {
             return 0
         fi
     fi
-    echo -e "${RED}安装失败${NC}"
-    return 1
+    echo -e "${RED}下载失败，安装终止。${NC}"
+    echo -n -e "${GREEN}按任意键退出...${NC}"
+    read -n 1
+    exit 1
 }
 
 get_v2_versions() {
-    local versions
-    versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
+    echo -e "${BLUE}获取 GOST v2 版本列表...${NC}"
+    local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
     if [[ -z "$versions" ]]; then
+        echo -e "${YELLOW}无法获取远程列表，使用本地列表${NC}"
         versions="2.12.0 2.11.5 2.11.4 2.11.3 2.11.2 2.11.1 2.11.0 2.10.0 2.9.2"
     fi
-    echo "$versions"
+    local version_array=($versions)
+    local version_count=${#version_array[@]}
+    echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
+    for i in "${!version_array[@]}"; do
+        echo "  $((i+1))) ${version_array[$i]}"
+    done
+    echo "  $((version_count+1))) 返回上级"
+    echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
+    read choice
+    if [[ -z "$choice" ]]; then
+        choice=1
+    fi
+    if [[ "$choice" -eq $((version_count+1)) ]]; then
+        return 1
+    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
+        local selected_version="${version_array[$((choice-1))]}"
+        install_gost_v2 "$selected_version"
+        return $?
+    else
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
 }
 
 get_v3_versions() {
-    local all_versions
-    all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
+    echo -e "${BLUE}获取 GOST v3 版本列表...${NC}"
+    local all_versions=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
+    local versions=""
     if [[ -z "$all_versions" ]]; then
-        all_versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2"
+        versions="v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2 v3.2.1 v3.2.0"
     else
-        all_versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
+        versions=$(echo "$all_versions" | grep -viE 'nightly|rc|alpha|beta' | head -10)
     fi
-    echo "$all_versions"
+    
+    local version_array=($versions)
+    local version_count=${#version_array[@]}
+    if [ $version_count -eq 0 ]; then
+        echo -e "${RED}未找到稳定版本，使用备用列表${NC}"
+        version_array=(v3.2.6 v3.2.5 v3.2.4 v3.2.3 v3.2.2)
+        version_count=${#version_array[@]}
+    fi
+    
+    echo -e "${GREEN}可用的 GOST v3 稳定版本:${NC}"
+    for i in "${!version_array[@]}"; do
+        echo "  $((i+1))) ${version_array[$i]}"
+    done
+    echo "  $((version_count+1))) 返回上级"
+    echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
+    read choice
+    if [[ -z "$choice" ]]; then
+        choice=1
+    fi
+    if [[ "$choice" -eq $((version_count+1)) ]]; then
+        return 1
+    elif [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$version_count" ]]; then
+        local selected_version="${version_array[$((choice-1))]}"
+        install_gost_v3 "$selected_version"
+        return $?
+    else
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
 }
 
 select_version_to_install() {
@@ -232,621 +312,567 @@ select_version_to_install() {
     echo -e "  ${GREEN}1${NC}) GOST v2"
     echo -e "  ${GREEN}2${NC}) GOST v3"
     echo -e "  ${GREEN}0${NC}) 返回"
+    echo -e "${BLUE}========================================${NC}"
     echo -n -e "${YELLOW}请选择 [0-2]: ${NC}"
-    read -r choice
+    read choice
     case $choice in
-        1)
-            local versions
-            versions=$(get_v2_versions)
-            local ver_array=($versions)
-            echo -e "${GREEN}可用的 GOST v2 版本:${NC}"
-            for i in "${!ver_array[@]}"; do echo "  $((i+1))) ${ver_array[$i]}"; done
-            echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
-            read -r v_choice
-            [[ -z "$v_choice" ]] && v_choice=1
-            if [[ "$v_choice" =~ ^[0-9]+$ ]] && [ "$v_choice" -ge 1 ] && [ "$v_choice" -le ${#ver_array[@]} ]; then
-                install_gost_v2 "${ver_array[$((v_choice-1))]}"
-                return $?
-            fi
-            ;;
-        2)
-            local versions
-            versions=$(get_v3_versions)
-            local ver_array=($versions)
-            echo -e "${GREEN}可用的 GOST v3 版本:${NC}"
-            for i in "${!ver_array[@]}"; do echo "  $((i+1))) ${ver_array[$i]}"; done
-            echo -n -e "${YELLOW}请输入版本数字 (默认 1): ${NC}"
-            read -r v_choice
-            [[ -z "$v_choice" ]] && v_choice=1
-            if [[ "$v_choice" =~ ^[0-9]+$ ]] && [ "$v_choice" -ge 1 ] && [ "$v_choice" -le ${#ver_array[@]} ]; then
-                install_gost_v3 "${ver_array[$((v_choice-1))]}"
-                return $?
-            fi
-            ;;
+        1) get_v2_versions ;;
+        2) get_v3_versions ;;
         0) return 1 ;;
         *) echo -e "${RED}无效选择${NC}"; return 1 ;;
     esac
-    return 1
 }
 
-# ========== 服务管理核心 ==========
-stop_all_gost() {
-    echo -e "${YELLOW}停止所有 GOST 进程...${NC}"
-    pkill -f "$GOST_BIN" 2>/dev/null || true
-    rm -f "$GOST_PID_FILE"
-    rm -f "$PID_DIR"/*.pid
-    echo -e "${GREEN}已停止所有 GOST 进程${NC}"
-}
-
-stop_single_gost() {
-    if [ -f "$GOST_PID_FILE" ] && kill -0 "$(cat "$GOST_PID_FILE")" 2>/dev/null; then
-        kill "$(cat "$GOST_PID_FILE")" 2>/dev/null || true
-        rm -f "$GOST_PID_FILE"
-        echo -e "${GREEN}单进程已停止${NC}"
-    else
-        echo -e "${YELLOW}单进程未运行${NC}"
-    fi
-}
-
-restart_gost_single() {
-    if [ -f "$START_CMD_FILE" ] && [ -s "$START_CMD_FILE" ]; then
-        local full_cmd
-        full_cmd=$(cat "$START_CMD_FILE")
-        stop_single_gost
-        cd "$GOST_DIR"
-        nohup $full_cmd > "$GOST_LOG" 2>&1 &
-        local pid=$!
-        sleep 1
-        if kill -0 "$pid" 2>/dev/null; then
-            echo $pid > "$GOST_PID_FILE"
-            echo -e "${GREEN}单进程模式已启动，PID: $pid${NC}"
-            return 0
-        else
-            echo -e "${RED}启动失败，请检查日志${NC}"
-            return 1
-        fi
-    else
-        echo -e "${RED}没有找到启动命令，请先配置代理或添加服务。${NC}"
-        return 1
-    fi
-}
-
-start_gost_independent() {
-    local cmd="$1"
-    local description="$2"
-    cd "$GOST_DIR"
-    local timestamp
-    timestamp=$(date +%s%N 2>/dev/null || date +%s)$RANDOM
-    local pidfile="$PID_DIR/service_${timestamp}.pid"
-    local infofile="${pidfile%.pid}.info"
-    nohup $cmd > "$GOST_LOG" 2>&1 &
-    local pid=$!
-    echo $pid > "$pidfile"
-    echo "$description" > "$infofile"
-    sleep 1
-    if kill -0 "$pid" 2>/dev/null; then
-        echo -e "${GREEN}独立进程已启动，PID: $pid${NC}"
-        echo -e "${GREEN}服务描述: $description${NC}"
-        return 0
-    else
-        echo -e "${RED}启动失败，请检查日志${NC}"
-        rm -f "$pidfile" "$infofile"
-        return 1
-    fi
-}
-
-append_node_info() {
+save_node_info() {
     local info="$1"
-    {
-        echo "--- $(date) ---"
-        echo "$info"
-        echo ""
-    } >> "$SUBFILE"
-    echo -e "${GREEN}节点信息已追加到: ${SUBFILE}${NC}"
-}
-
-replace_node_info() {
-    local info="$1"
-    {
-        echo "=== $(date) 替换配置 ==="
-        echo "$info"
-        echo ""
-    } > "$SUBFILE" 2>/dev/null || true
+    echo "$info" > "$SUBFILE"
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# ========== 参数收集函数 ==========
-safe_read() {
-    local prompt="$1"
-    local var_name="$2"
-    printf "%b" "$prompt" >&2
-    IFS= read -r "$var_name"
+# 通用启动函数（使用 eval 确保参数正确）
+start_gost_generic() {
+    local cmd="$1"
+    local info="$2"
+    cd "$GOST_DIR" || return 1
+    stop_gost
+    echo -e "${GREEN}启动代理...${NC}"
+    eval "nohup $cmd > \"$GOST_LOG\" 2>&1 &"
+    local pid=$!
+    echo $pid > "$GOST_PID_FILE"
+    sleep 2
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ 代理运行中 (PID: $pid)${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}代理信息:${NC}"
+        echo -e "${YELLOW}${info}${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        save_node_info "$info"
+        return 0
+    else
+        echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
+        return 1
+    fi
 }
 
-collect_dns_option() {
-    echo -n -e "${YELLOW}是否自定义 DNS 解析？[y/N]: ${NC}"
-    read -r use_dns
+# 配置 DNS（交互式）
+configure_dns() {
     local dns_str=""
+    echo -n -e "${YELLOW}是否配置自定义 DNS？[y/N]: ${NC}"
+    read use_dns
     if [[ "$use_dns" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}请输入 DNS 服务器列表，多个用逗号分隔。支持以下格式：${NC}"
-        echo -e "  ${GREEN}UDP 标准:${NC} 8.8.8.8 或 8.8.8.8:53/udp"
-        echo -e "  ${GREEN}TCP 查询:${NC} 1.1.1.1:53/tcp"
-        echo -e "  ${GREEN}DNS over TLS (DoT):${NC} 1.1.1.1:853/tls"
-        echo -e "  ${GREEN}DNS over HTTPS (DoH):${NC} https://dns.google/dns-query 或 https://cloudflare-dns.com/dns-query"
-        echo -e "  ${GREEN}代理链 UDP:${NC} 8.8.8.8/udp-chain (需配合 -F)"
-        echo -e "  ${GREEN}代理链 TCP:${NC} 1.1.1.1/udp-chain"
-        echo -n -e "${YELLOW}请输入 (默认 https://1.1.1.1/dns-query): ${NC}"
-        read -r dns_input
-        if [ -z "$dns_input" ]; then
-            dns_input="https://1.1.1.1/dns-query"
-        fi
-        dns_str="?dns=${dns_input}"
+        echo -e "${BLUE}请选择 DNS 类型:${NC}"
+        echo -e "  ${GREEN}1${NC}) UDP DNS (例如 8.8.8.8:53)"
+        echo -e "  ${GREEN}2${NC}) TCP DNS (例如 8.8.8.8:53)"
+        echo -e "  ${GREEN}3${NC}) DoH (DNS over HTTPS) 默认: https://1.1.1.1/dns-query"
+        echo -e "  ${GREEN}4${NC}) DoT (DNS over TLS) 例如 tls://1.1.1.1:853"
+        echo -n -e "${YELLOW}请输入 [1-4]: ${NC}"
+        read dns_type
+        local dns_server=""
+        case $dns_type in
+            1)
+                echo -n -e "${YELLOW}请输入 UDP DNS 服务器地址 (默认 8.8.8.8:53): ${NC}"
+                read dns_server
+                [ -z "$dns_server" ] && dns_server="8.8.8.8:53"
+                dns_str="dns=udp://$dns_server"
+                ;;
+            2)
+                echo -n -e "${YELLOW}请输入 TCP DNS 服务器地址 (默认 8.8.8.8:53): ${NC}"
+                read dns_server
+                [ -z "$dns_server" ] && dns_server="8.8.8.8:53"
+                dns_str="dns=tcp://$dns_server"
+                ;;
+            3)
+                echo -n -e "${YELLOW}请输入 DoH URL (默认 https://1.1.1.1/dns-query): ${NC}"
+                read dns_server
+                [ -z "$dns_server" ] && dns_server="https://1.1.1.1/dns-query"
+                dns_str="dns=$dns_server"
+                ;;
+            4)
+                echo -n -e "${YELLOW}请输入 DoT 地址 (默认 tls://1.1.1.1:853): ${NC}"
+                read dns_server
+                [ -z "$dns_server" ] && dns_server="tls://1.1.1.1:853"
+                dns_str="dns=$dns_server"
+                ;;
+            *)
+                echo -e "${RED}无效选择，跳过 DNS 配置。${NC}"
+                ;;
+        esac
     fi
     echo "$dns_str"
 }
 
-collect_http_params() {
-    local port user pass
-    while true; do
-        safe_read "${YELLOW}请输入端口: ${NC}" port
-        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
-        echo -e "${RED}端口无效${NC}"
-    done
-    safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
-    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
-    local dns_opt
-    dns_opt=$(collect_dns_option)
-    local ip
-    ip=$(get_local_ip)
-    local cmd="-L http://${user}:${pass}@:${port}${dns_opt}"
-    local desc="HTTP 代理: http://${user}:${pass}@${ip}:${port}"
-    echo "$cmd|||$desc"
-}
-
-collect_socks5_params() {
-    local port user pass
-    while true; do
-        safe_read "${YELLOW}请输入端口: ${NC}" port
-        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
-        echo -e "${RED}端口无效${NC}"
-    done
-    safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
-    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
-    local dns_opt
-    dns_opt=$(collect_dns_option)
-    local ip
-    ip=$(get_local_ip)
-    local cmd="-L socks5://${user}:${pass}@:${port}${dns_opt}"
-    local desc="SOCKS5 代理: socks5://${user}:${pass}@${ip}:${port}"
-    echo "$cmd|||$desc"
-}
-
-collect_adapt_params() {
-    local port user pass
-    while true; do
-        safe_read "${YELLOW}请输入端口: ${NC}" port
-        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
-        echo -e "${RED}端口无效${NC}"
-    done
-    safe_read "${YELLOW}用户名 (默认 admin): ${NC}" user; user=${user:-admin}
-    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
-    local dns_opt
-    dns_opt=$(collect_dns_option)
-    local ip
-    ip=$(get_local_ip)
-    local cmd="-L ${user}:${pass}@:${port}${dns_opt}"
-    local desc="自适应代理: http://${user}:${pass}@${ip}:${port} / socks5://${user}:${pass}@${ip}:${port}"
-    echo "$cmd|||$desc"
-}
-
-collect_ss_params() {
-    local port method pass name
-    while true; do
-        safe_read "${YELLOW}请输入端口: ${NC}" port
-        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
-        echo -e "${RED}端口无效${NC}"
-    done
-    safe_read "${YELLOW}加密方式 (默认 aes-256-gcm): ${NC}" method; method=${method:-aes-256-gcm}
-    safe_read "${YELLOW}密码 (默认 123456): ${NC}" pass; pass=${pass:-123456}
-    safe_read "${YELLOW}节点名称 (可选): ${NC}" name
-    local dns_opt
-    dns_opt=$(collect_dns_option)
-    local ip
-    ip=$(get_local_ip)
-    local cmd="-L ss://${method}:${pass}@:${port}${dns_opt}"
-    local desc="Shadowsocks 代理: ss://${method}:${pass}@${ip}:${port}"
-    [ -n "$name" ] && desc="${desc}#${name}"
-    echo "$cmd|||$desc"
-}
-
-collect_ws_params() {
-    local port path
-    while true; do
-        safe_read "${YELLOW}请输入监听端口: ${NC}" port
-        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
-        echo -e "${RED}端口无效${NC}"
-    done
-    safe_read "${YELLOW}WebSocket 路径 (默认 /ws): ${NC}" path; path=${path:-/ws}
-    local dns_opt
-    dns_opt=$(collect_dns_option)
-    local ip
-    ip=$(get_local_ip)
-    local base_url="ws://:${port}?path=${path}"
-    if [[ -n "$dns_opt" ]]; then
-        local dns_part="${dns_opt#?}"
-        base_url="${base_url}&${dns_part}"
+# 为 URL 添加 DNS 参数
+append_dns_to_url() {
+    local base_url="$1"
+    local dns_param="$2"
+    if [ -z "$dns_param" ]; then
+        echo "$base_url"
+        return
     fi
-    local cmd="-L \"${base_url}\""
-    local desc="WebSocket 代理: ws://${ip}:${port}${path}"
-    echo "$cmd|||$desc"
+    if [[ "$base_url" == *"?"* ]]; then
+        echo "${base_url}&${dns_param}"
+    else
+        echo "${base_url}?${dns_param}"
+    fi
 }
 
-collect_chain_params() {
+# WebSocket 配置
+configure_websocket() {
+    local port
+    while true; do
+        echo -n -e "${YELLOW}请输入监听端口: ${NC}"
+        read port
+        [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
+        echo -e "${RED}端口无效${NC}"
+    done
+    echo -n -e "${YELLOW}请输入 WebSocket 路径 (默认 /ws): ${NC}"
+    read path
+    [ -z "$path" ] && path="/ws"
+    
+    local dns_param=$(configure_dns)
+    local scheme="ws"
+    local base_url="${scheme}://:${port}?path=${path}"
+    local full_url=$(append_dns_to_url "$base_url" "$dns_param")
+    local cmd="$GOST_BIN -L \"$full_url\""
+    local ip=$(get_local_ip)
+    local info="WebSocket 代理: ws://${ip}:${port}${path}"
+    [ -n "$dns_param" ] && info="$info (DNS: $dns_param)"
+    start_gost_generic "$cmd" "$info"
+}
+
+# SSH 端口转发配置
+configure_ssh() {
+    local local_listen="$1"
+    local local_proto="$2"
+    local local_listen_arg="$3"
+    
+    echo -e "${YELLOW}--- SSH 端口转发配置 ---${NC}"
+    echo -n -e "${YELLOW}请输入 SSH 服务器地址: ${NC}"
+    read ssh_host
+    [ -z "$ssh_host" ] && { echo -e "${RED}服务器地址不能为空${NC}"; return 1; }
+    echo -n -e "${YELLOW}请输入 SSH 端口 (默认 22): ${NC}"
+    read ssh_port
+    [ -z "$ssh_port" ] && ssh_port="22"
+    echo -n -e "${YELLOW}请输入 SSH 用户名: ${NC}"
+    read ssh_user
+    [ -z "$ssh_user" ] && { echo -e "${RED}用户名不能为空${NC}"; return 1; }
+    echo -e "${YELLOW}SSH 认证方式:${NC}"
+    echo -e "  ${GREEN}1${NC}) 密码认证"
+    echo -e "  ${GREEN}2${NC}) 密钥认证"
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read auth_type
+    local ssh_auth=""
+    if [ "$auth_type" = "1" ]; then
+        echo -n -e "${YELLOW}请输入 SSH 密码: ${NC}"
+        read -s ssh_pass
+        echo
+        ssh_auth="${ssh_user}:${ssh_pass}"
+    else
+        ssh_auth="${ssh_user}"
+    fi
+    local forward_url="ssh://${ssh_auth}@${ssh_host}:${ssh_port}"
+    local cmd="$GOST_BIN $local_listen -F \"$forward_url\""
+    local info="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 SSH ssh://${ssh_user}@${ssh_host}:${ssh_port}"
+    start_gost_generic "$cmd" "$info"
+}
+
+# 链式代理配置
+configure_chain() {
     echo -e "${BLUE}请选择本地代理类型:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
-    safe_read "${YELLOW}请输入 [1-2]: ${NC}" local_type
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read local_type
     local local_proto=""
     case $local_type in
         1) local_proto="http" ;;
         2) local_proto="socks5" ;;
-        *) echo -e "${RED}无效，使用 HTTP${NC}"; local_proto="http" ;;
+        *) echo -e "${RED}无效选择，使用 HTTP${NC}"; local_proto="http" ;;
     esac
     local local_port
     while true; do
-        safe_read "${YELLOW}请输入本地监听端口: ${NC}" local_port
+        echo -n -e "${YELLOW}请输入本地监听端口: ${NC}"
+        read local_port
         [[ "$local_port" =~ ^[0-9]+$ ]] && [ "$local_port" -ge 1 ] && [ "$local_port" -le 65535 ] && break
         echo -e "${RED}端口无效${NC}"
     done
-    safe_read "${YELLOW}本地代理是否需要认证？[y/N]: ${NC}" local_auth
+    echo -n -e "${YELLOW}本地代理是否需要认证？[y/N]: ${NC}"
+    read local_auth
+    local local_user=""; local local_pass=""
+    if [[ "$local_auth" =~ ^[Yy]$ ]]; then
+        echo -n -e "${YELLOW}本地用户名 (默认 admin): ${NC}"
+        read local_user
+        [ -z "$local_user" ] && local_user="admin"
+        echo -n -e "${YELLOW}本地密码 (默认 123456): ${NC}"
+        read local_pass
+        [ -z "$local_pass" ] && local_pass="123456"
+    fi
     local local_listen=""
     local local_listen_arg=""
-    if [[ "$local_auth" =~ ^[Yy]$ ]]; then
-        safe_read "${YELLOW}本地用户名 (默认 admin): ${NC}" local_user; local_user=${local_user:-admin}
-        safe_read "${YELLOW}本地密码 (默认 123456): ${NC}" local_pass; local_pass=${local_pass:-123456}
+    if [ -n "$local_user" ]; then
         local_listen="-L ${local_proto}://${local_user}:${local_pass}@:${local_port}"
         local_listen_arg="${local_user}:${local_pass}@:${local_port}"
     else
         local_listen="-L ${local_proto}://:${local_port}"
         local_listen_arg=":${local_port}"
     fi
+
     echo -e "${YELLOW}请选择远程转发模式:${NC}"
     echo -e "  ${GREEN}1${NC}) WebSocket (ws/wss)"
     echo -e "  ${GREEN}2${NC}) SSH 端口转发"
-    safe_read "${YELLOW}请输入 [1-2]: ${NC}" remote_mode
-    local remote_url=""
-    if [ "$remote_mode" = "1" ]; then
-        safe_read "${YELLOW}请输入远程 WebSocket 地址 (格式: ws://host:port/path 或 wss://...): ${NC}" remote_url
-        while [ -z "$remote_url" ]; do
-            safe_read "${RED}地址不能为空${NC}" remote_url
-        done
-        local dns_opt_remote
-        dns_opt_remote=$(collect_dns_option)
-        if [[ -n "$dns_opt_remote" ]]; then
-            if [[ "$remote_url" == *"?"* ]]; then
-                remote_url="${remote_url}&${dns_opt_remote#?}"
+    echo -n -e "${YELLOW}请输入 [1-2]: ${NC}"
+    read remote_mode
+
+    case $remote_mode in
+        1)
+            echo -e "${YELLOW}请输入远程 WebSocket 地址:${NC}"
+            echo -e "  格式: ws://host:port/path 或 wss://host:port/path"
+            echo -n -e "${YELLOW}远程地址: ${NC}"
+            read remote_url
+            [ -z "$remote_url" ] && { echo -e "${RED}远程地址不能为空${NC}"; return 1; }
+            # 为远程 URL 添加 DNS 选项（解析远程域名时使用）
+            local dns_param=$(configure_dns)
+            local full_remote=$(append_dns_to_url "$remote_url" "$dns_param")
+            local cmd="$GOST_BIN $local_listen -F \"$full_remote\""
+            local info="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 ${full_remote}"
+            start_gost_generic "$cmd" "$info"
+            ;;
+        2)
+            configure_ssh "$local_listen" "$local_proto" "$local_listen_arg"
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return 1
+            ;;
+    esac
+}
+
+# 原有协议启动函数（HTTP/SOCKS5/自适应）
+start_gost_legacy() {
+    local protocol=$1
+    local port=$2
+    local auth1=$3
+    local auth2=$4
+    local name=$5   # 仅 Shadowsocks 使用
+    cd "$GOST_DIR" || return 1
+    stop_gost
+    local cmd=""
+    local proxy_url=""
+    local ip=$(get_local_ip)
+    local dns_param=$(configure_dns)
+    case $protocol in
+        1)
+            base_url="http://${auth1}:${auth2}@:${port}"
+            full_url=$(append_dns_to_url "$base_url" "$dns_param")
+            cmd="$GOST_BIN -L \"$full_url\""
+            proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
+            echo -e "${GREEN}启动 HTTP 代理...${NC}"
+            ;;
+        2)
+            base_url="socks5://${auth1}:${auth2}@:${port}"
+            full_url=$(append_dns_to_url "$base_url" "$dns_param")
+            cmd="$GOST_BIN -L \"$full_url\""
+            proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
+            echo -e "${GREEN}启动 SOCKS5 代理...${NC}"
+            ;;
+        3)
+            base_url="${auth1}:${auth2}@:${port}"
+            full_url=$(append_dns_to_url "$base_url" "$dns_param")
+            cmd="$GOST_BIN -L \"$full_url\""
+            proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
+            echo -e "${GREEN}启动自适应代理...${NC}"
+            ;;
+        4)
+            # Shadowsocks 不支持 URL 参数，忽略 DNS
+            cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}"
+            ss_link="${auth1}:${auth2}@${ip}:${port}"
+            if command -v base64 >/dev/null 2>&1; then
+                ss_base64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
             else
-                remote_url="${remote_url}${dns_opt_remote}"
+                ss_base64=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
             fi
+            if [ -n "$name" ]; then
+                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}#${name}"
+                proxy_url_extra="ss://${ss_base64}#${name}"
+            else
+                proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
+                proxy_url_extra="ss://${ss_base64}"
+            fi
+            echo -e "${GREEN}启动 Shadowsocks 代理...${NC}"
+            save_node_info "${proxy_url}\nBase64: ${proxy_url_extra}"
+            nohup $cmd > "$GOST_LOG" 2>&1 &
+            local pid=$!
+            echo $pid > "$GOST_PID_FILE"
+            sleep 2
+            if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+                echo -e "${GREEN}✓ 代理运行中 (PID: $pid)${NC}"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${GREEN}代理链接:${NC}"
+                echo -e "${YELLOW}${proxy_url}${NC}"
+                if [ -n "$proxy_url_extra" ]; then
+                    echo -e "${GREEN}Base64 编码 (用于 v2ray 等):${NC}"
+                    echo -e "${YELLOW}${proxy_url_extra}${NC}"
+                fi
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                return 0
+            else
+                echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
+                return 1
+            fi
+            ;;
+    esac
+    # 非 Shadowsocks 协议的统一启动
+    nohup $cmd > "$GOST_LOG" 2>&1 &
+    local pid=$!
+    echo $pid > "$GOST_PID_FILE"
+    sleep 2
+    if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ 代理运行中 (PID: $pid)${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}代理链接:${NC}"
+        echo -e "${YELLOW}${proxy_url}${NC}"
+        if [ -n "$dns_param" ]; then
+            echo -e "${GREEN}自定义 DNS: ${dns_param#dns=}${NC}"
         fi
-        local cmd="$local_listen -F \"${remote_url}\""
-        local desc="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 ${remote_url}"
-        echo "$cmd|||$desc"
-    elif [ "$remote_mode" = "2" ]; then
-        safe_read "${YELLOW}请输入 SSH 服务器地址: ${NC}" ssh_host
-        [ -z "$ssh_host" ] && { echo -e "${RED}地址不能为空${NC}"; return 1; }
-        safe_read "${YELLOW}请输入 SSH 端口 (默认 22): ${NC}" ssh_port; ssh_port=${ssh_port:-22}
-        safe_read "${YELLOW}请输入 SSH 用户名: ${NC}" ssh_user
-        [ -z "$ssh_user" ] && { echo -e "${RED}用户名不能为空${NC}"; return 1; }
-        echo -e "${YELLOW}SSH 认证方式: 1) 密码认证  2) 密钥认证${NC}"
-        safe_read "${YELLOW}请输入 [1-2]: ${NC}" auth_type
-        local ssh_auth=""
-        if [ "$auth_type" = "1" ]; then
-            safe_read "${YELLOW}请输入 SSH 密码: ${NC}" ssh_pass
-            ssh_auth="${ssh_user}:${ssh_pass}"
-        else
-            ssh_auth="${ssh_user}"
-        fi
-        local forward_url="ssh://${ssh_auth}@${ssh_host}:${ssh_port}"
-        local dns_opt_remote
-        dns_opt_remote=$(collect_dns_option)
-        if [[ -n "$dns_opt_remote" ]]; then
-            forward_url="${forward_url}${dns_opt_remote}"
-        fi
-        local cmd="$local_listen -F \"${forward_url}\""
-        local desc="链式代理: 本地 ${local_proto}://${local_listen_arg} -> 远程 SSH ssh://${ssh_user}@${ssh_host}:${ssh_port}"
-        echo "$cmd|||$desc"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        save_node_info "$proxy_url"
+        return 0
     else
-        echo -e "${RED}无效选择${NC}"
+        echo -e "${RED}启动失败，请检查日志: ${GOST_LOG}${NC}"
         return 1
     fi
 }
 
-# ========== 配置替换模式 ==========
+# 配置代理主入口
 configure_proxy() {
+    local skip_confirm=$1
+    if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
+        echo -e "${RED}未检测到 GOST，请先安装。${NC}"
+        echo -n -e "${YELLOW}是否现在安装？[y/N]: ${NC}"
+        read ans
+        if [[ "$ans" =~ ^[Yy]$ ]]; then
+            if select_version_to_install; then
+                if [ -f "$GOST_BIN" ]; then
+                    echo -e "${GREEN}安装完成，继续配置代理。${NC}"
+                else
+                    echo -e "${RED}安装失败，无法配置代理。${NC}"
+                    echo -n -e "${GREEN}按任意键返回...${NC}"
+                    read -n 1
+                    return 1
+                fi
+            else
+                echo -e "${RED}安装取消。${NC}"
+                echo -n -e "${GREEN}按任意键返回...${NC}"
+                read -n 1
+                return 1
+            fi
+        else
+            echo -e "${RED}配置取消。${NC}"
+            echo -n -e "${GREEN}按任意键返回...${NC}"
+            read -n 1
+            return 1
+        fi
+    fi
+
+    if [ "$skip_confirm" != "auto" ]; then
+        local installed_ver=$(get_installed_gost_version)
+        echo -e "${GREEN}当前已安装版本: ${installed_ver}${NC}"
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            local pid=$(pgrep -f "$GOST_BIN" | head -1)
+            echo -e "${YELLOW}当前有运行中的进程 (PID: ${pid})，更改配置会先停止进程。${NC}"
+        fi
+        echo -n -e "${YELLOW}是否重新配置代理？[y/N]: ${NC}"
+        read ans
+        if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}配置取消。${NC}"
+            echo -n -e "${GREEN}按任意键返回...${NC}"
+            read -n 1
+            return 1
+        fi
+    fi
+
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}       配置代理（替换模式）${NC}"
+    echo -e "${GREEN}          配置代理${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "${YELLOW}请选择代理类型:${NC}"
     echo -e "  ${GREEN}1${NC}) HTTP"
     echo -e "  ${GREEN}2${NC}) SOCKS5"
-    echo -e "  ${GREEN}3${NC}) 自适应"
+    echo -e "  ${GREEN}3${NC}) 自适应 (HTTP/SOCKS5 自动识别)"
     echo -e "  ${GREEN}4${NC}) Shadowsocks"
     echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
-    echo -e "  ${GREEN}6${NC}) 链式代理"
+    echo -e "  ${GREEN}6${NC}) 链式代理 (本地 HTTP/SOCKS5 -> 远程 WS/WSS/SSH)"
     echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
-    read -r ptype
-    local result=""
-    case $ptype in
-        1) result=$(collect_http_params) ;;
-        2) result=$(collect_socks5_params) ;;
-        3) result=$(collect_adapt_params) ;;
-        4) result=$(collect_ss_params) ;;
-        5) result=$(collect_ws_params) ;;
-        6) result=$(collect_chain_params) ;;
-        *) echo -e "${RED}无效选择${NC}"; return 1 ;;
+    read protocol
+    [[ ! "$protocol" =~ ^[1-6]$ ]] && protocol=3
+
+    case $protocol in
+        1|2|3|4)
+            while true; do
+                echo -n -e "${YELLOW}请输入端口: ${NC}"
+                read port
+                [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
+                echo -e "${RED}端口无效${NC}"
+            done
+            local username="admin"
+            local password="123456"
+            local method="aes-256-gcm"
+            local node_name=""
+            if [ "$protocol" -eq 4 ]; then
+                echo -e "${BLUE}Shadowsocks 配置${NC}"
+                local gost_ver=$(get_gost_version)
+                local ss_methods=(); local ss_method_names=()
+                if version_ge "$gost_ver" "2.8.0"; then
+                    if version_ge "$gost_ver" "3.1.0"; then
+                        ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
+                        ss_method_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
+                        echo -e "${GREEN}✅ 当前版本支持 AEAD 加密 (推荐)${NC}"
+                    else
+                        ss_methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305" "aes-256-cfb" "chacha20-ietf" "rc4-md5")
+                        ss_method_names=("aes-256-gcm (推荐AEAD)" "aes-128-gcm (AEAD)" "chacha20-ietf-poly1305 (推荐AEAD)" "aes-256-cfb (传统)" "chacha20-ietf (传统)" "rc4-md5 (传统)")
+                        echo -e "${GREEN}✅ 当前版本支持所有加密方式 (AEAD + 传统流加密)${NC}"
+                    fi
+                else
+                    echo -e "${RED}❌ 当前版本低于 2.8.0，不支持 Shadowsocks 协议。${NC}"
+                    echo -n -e "${GREEN}按任意键返回...${NC}"
+                    read -n 1
+                    return 1
+                fi
+                echo -e "${YELLOW}请选择加密方式:${NC}"
+                for i in "${!ss_method_names[@]}"; do
+                    echo "  $((i+1))) ${ss_method_names[$i]}"
+                done
+                echo -n -e "${YELLOW}请输入 [1-${#ss_method_names[@]}] (默认 1): ${NC}"
+                read method_choice
+                if [[ -z "$method_choice" ]]; then method_choice=1; fi
+                if [[ "$method_choice" -ge 1 ]] && [[ "$method_choice" -le ${#ss_methods[@]} ]]; then
+                    method="${ss_methods[$((method_choice-1))]}"
+                else
+                    echo -e "${RED}无效选择，使用默认 aes-256-gcm${NC}"
+                    method="aes-256-gcm"
+                fi
+                echo -e "${GREEN}已选择加密方式: ${method}${NC}"
+                echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"
+                read input_pass
+                [ -n "$input_pass" ] && password="$input_pass"
+                echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"
+                read input_name
+                [ -n "$input_name" ] && node_name="$input_name" || node_name="GOST-SS"
+                start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name"
+            else
+                echo -e "${BLUE}账号密码 (默认 admin/123456)${NC}"
+                echo -n -e "${YELLOW}账号 [admin]: ${NC}"
+                read input_user
+                [ -n "$input_user" ] && username="$input_user"
+                echo -n -e "${YELLOW}密码 [123456]: ${NC}"
+                read input_pass
+                [ -n "$input_pass" ] && password="$input_pass"
+                start_gost_legacy "$protocol" "$port" "$username" "$password"
+            fi
+            ;;
+        5)
+            configure_websocket
+            ;;
+        6)
+            configure_chain
+            ;;
     esac
-    if [ -z "$result" ]; then
-        echo -e "${RED}参数收集失败${NC}"
-        return 1
-    fi
-    local cmd_part
-    local desc
-    cmd_part=$(echo "$result" | cut -d'|' -f1)
-    desc=$(echo "$result" | cut -d'|' -f3-)
-    echo "$GOST_BIN $cmd_part" > "$START_CMD_FILE"
-    restart_gost_single
-    replace_node_info "$desc"
-    safe_read "${YELLOW}是否开启开机自启？[y/N]: ${NC}" auto_start
+
+    echo -n -e "${YELLOW}是否开启开机自启？[y/N]: ${NC}"
+    read auto_start
     if [[ "$auto_start" =~ ^[Yy]$ ]]; then
         enable_autostart
     fi
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
 }
 
-# ========== 添加服务 ==========
-add_service_to_single() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}       添加服务（单进程模式）${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${YELLOW}请选择要添加的代理类型:${NC}"
-    echo -e "  ${GREEN}1${NC}) HTTP"
-    echo -e "  ${GREEN}2${NC}) SOCKS5"
-    echo -e "  ${GREEN}3${NC}) 自适应"
-    echo -e "  ${GREEN}4${NC}) Shadowsocks"
-    echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
-    echo -e "  ${GREEN}6${NC}) 链式代理"
-    echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
-    read -r ptype
-    local result=""
-    case $ptype in
-        1) result=$(collect_http_params) ;;
-        2) result=$(collect_socks5_params) ;;
-        3) result=$(collect_adapt_params) ;;
-        4) result=$(collect_ss_params) ;;
-        5) result=$(collect_ws_params) ;;
-        6) result=$(collect_chain_params) ;;
-        *) echo -e "${RED}无效选择${NC}"; return 1 ;;
-    esac
-    if [ -z "$result" ]; then
-        echo -e "${RED}参数收集失败${NC}"
-        return 1
-    fi
-    local cmd_part
-    local desc
-    cmd_part=$(echo "$result" | cut -d'|' -f1)
-    desc=$(echo "$result" | cut -d'|' -f3-)
-    if [ -f "$START_CMD_FILE" ] && [ -s "$START_CMD_FILE" ]; then
-        local old_cmd
-        old_cmd=$(cat "$START_CMD_FILE")
-        echo "$old_cmd $cmd_part" > "$START_CMD_FILE"
-    else
-        echo "$GOST_BIN $cmd_part" > "$START_CMD_FILE"
-    fi
-    restart_gost_single
-    append_node_info "$desc"
-}
-
-add_service_independent() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}       添加服务（独立进程模式）${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${YELLOW}请选择要添加的代理类型:${NC}"
-    echo -e "  ${GREEN}1${NC}) HTTP"
-    echo -e "  ${GREEN}2${NC}) SOCKS5"
-    echo -e "  ${GREEN}3${NC}) 自适应"
-    echo -e "  ${GREEN}4${NC}) Shadowsocks"
-    echo -e "  ${GREEN}5${NC}) WebSocket (ws)"
-    echo -e "  ${GREEN}6${NC}) 链式代理"
-    echo -n -e "${YELLOW}请输入 [1-6]: ${NC}"
-    read -r ptype
-    local result=""
-    case $ptype in
-        1) result=$(collect_http_params) ;;
-        2) result=$(collect_socks5_params) ;;
-        3) result=$(collect_adapt_params) ;;
-        4) result=$(collect_ss_params) ;;
-        5) result=$(collect_ws_params) ;;
-        6) result=$(collect_chain_params) ;;
-        *) echo -e "${RED}无效选择${NC}"; return 1 ;;
-    esac
-    if [ -z "$result" ]; then
-        echo -e "${RED}参数收集失败${NC}"
-        return 1
-    fi
-    local cmd_part
-    local desc
-    cmd_part=$(echo "$result" | cut -d'|' -f1)
-    desc=$(echo "$result" | cut -d'|' -f3-)
-    local full_cmd="$GOST_BIN $cmd_part"
-    start_gost_independent "$full_cmd" "$desc"
-    echo -e "${YELLOW}独立进程已启动，未记录到节点文件。${NC}"
-}
-
-add_service() {
-    echo -e "${BLUE}请选择添加方式:${NC}"
-    echo -e "  ${GREEN}1${NC}) 单进程多服务（追加服务并重启，所有服务共用一个进程）"
-    echo -e "  ${GREEN}2${NC}) 独立进程（启动新进程，不影响现有服务）"
-    safe_read "${YELLOW}请输入 [1-2]: ${NC}" mode
-    case $mode in
-        1) add_service_to_single ;;
-        2) add_service_independent ;;
-        *) echo -e "${RED}无效选择${NC}" ;;
-    esac
-}
-
-# ========== 开机自启 ==========
 enable_autostart() {
-    local current_cron
-    current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost" || true)
-    local keepalive_script="$GOST_DIR/keepalive.sh"
-    cat > "$keepalive_script" << EOF
+    local current_cron=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR/gost")
+    cat > "$GOST_DIR/keepalive.sh" << EOF
 #!/usr/bin/env bash
 GOST_DIR="$GOST_DIR"
-START_CMD_FILE="\$GOST_DIR/start_cmd.txt"
-GOST_PID_FILE="\$GOST_DIR/gost.pid"
-GOST_BIN="\$GOST_DIR/gost"
-if [ -f "\$START_CMD_FILE" ] && [ -s "\$START_CMD_FILE" ]; then
-    if ! pgrep -f "\$GOST_BIN" > /dev/null 2>&1; then
-        cd "\$GOST_DIR"
-        nohup \$(cat "\$START_CMD_FILE") > \$GOST_DIR/gost.log 2>&1 &
-        echo \$! > "\$GOST_PID_FILE"
+cd "\$GOST_DIR"
+if [ -f "gost.pid" ] && kill -0 "\$(cat gost.pid)" 2>/dev/null; then
+    exit 0
+fi
+if ! pgrep -f "\$GOST_DIR/gost" > /dev/null; then
+    if [ -f "start_cmd.txt" ]; then
+        cmd=\$(cat start_cmd.txt)
+        eval "nohup \$cmd > gost.log 2>&1 &"
+        echo \$! > gost.pid
     fi
 fi
 EOF
-    chmod +x "$keepalive_script"
-    (echo "$current_cron"; echo "@reboot $keepalive_script"; echo "*/5 * * * * $keepalive_script") | crontab -
-    echo -e "${GREEN}✓ 已配置开机自启和进程保活（单进程模式）${NC}"
+    chmod +x "$GOST_DIR/keepalive.sh"
+    local running_cmd=$(ps -ef | grep "$GOST_BIN" | grep -v grep | head -1 | sed 's/.*\.\/gost/\.\/gost/')
+    if [ -n "$running_cmd" ]; then
+        echo "$running_cmd" > "$GOST_DIR/start_cmd.txt"
+    fi
+    (echo "$current_cron"; echo "@reboot $GOST_DIR/keepalive.sh"; echo "*/5 * * * * $GOST_DIR/keepalive.sh") | crontab -
+    echo -e "${GREEN}✓ 已配置开机自启和进程保活${NC}"
 }
 
-# ========== 查看状态 ==========
+uninstall_gost() {
+    echo -e "${YELLOW}正在卸载 GOST...${NC}"
+    stop_gost
+    crontab -l 2>/dev/null | grep -v "$GOST_DIR" | crontab -
+    rm -rf "$GOST_DIR"
+    echo -e "${GREEN}✓ 卸载完成${NC}"
+}
+
+get_gost_version() {
+    if [ ! -f "$GOST_BIN" ]; then
+        echo "0.0.0"
+        return
+    fi
+    local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    echo "${ver:-0.0.0}"
+}
+
+version_ge() {
+    local v1=$1
+    local v2=$2
+    [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" != "$v1" ]
+}
+
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}          系统状态${NC}"
     echo -e "${BLUE}========================================${NC}"
-    local local_ip
-    local_ip=$(get_local_ip)
+    local local_ip=$(get_local_ip)
     echo -e "${GREEN}本机 IP: ${YELLOW}${local_ip}${NC}"
     if [ -f "$GOST_BIN" ]; then
-        echo -e "${GREEN}GOST 版本: $(get_installed_gost_version)${NC}"
+        local version_info=$("$GOST_BIN" -V 2>&1 | head -1)
+        echo -e "${GREEN}GOST 状态: 已安装${NC}"
+        echo -e "${GREEN}版本信息: ${version_info}${NC}"
         echo -e "${GREEN}安装路径: ${GOST_BIN}${NC}"
-    else
-        echo -e "${RED}GOST 未安装${NC}"
-    fi
-    echo -e "${BLUE}--- 单进程模式 ---${NC}"
-    if [ -f "$START_CMD_FILE" ] && [ -s "$START_CMD_FILE" ]; then
-        echo -e "${GREEN}启动命令: $(cat "$START_CMD_FILE")${NC}"
-        if [ -f "$GOST_PID_FILE" ] && kill -0 "$(cat "$GOST_PID_FILE")" 2>/dev/null; then
-            echo -e "${GREEN}进程 PID: $(cat "$GOST_PID_FILE") (运行中)${NC}"
+        if pgrep -f "$GOST_BIN" > /dev/null 2>&1; then
+            echo -e "${GREEN}代理状态: 运行中 ✓${NC}"
+            local pid=$(pgrep -f "$GOST_BIN" | head -1)
+            echo -e "${GREEN}进程 PID: ${pid}${NC}"
         else
-            echo -e "${RED}进程未运行${NC}"
+            echo -e "${RED}代理状态: 未运行 ✗${NC}"
         fi
     else
-        echo -e "${YELLOW}无单进程配置${NC}"
-    fi
-    echo -e "${BLUE}--- 独立进程 ---${NC}"
-    local found=0
-    for pidfile in "$PID_DIR"/*.pid; do
-        if [ -f "$pidfile" ]; then
-            local pid
-            pid=$(cat "$pidfile")
-            if kill -0 "$pid" 2>/dev/null; then
-                local infofile="${pidfile%.pid}.info"
-                local desc=""
-                [ -f "$infofile" ] && desc=$(cat "$infofile")
-                local cmdline=""
-                if [ -f "/proc/$pid/cmdline" ]; then
-                    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
-                fi
-                echo -e "${GREEN}PID: $pid${NC}"
-                echo -e "  描述: $desc"
-                [ -n "$cmdline" ] && echo -e "  命令: $cmdline"
-                ((found++))
-            else
-                rm -f "$pidfile" "$infofile"
-            fi
-        fi
-    done
-    if [ $found -eq 0 ]; then
-        echo -e "${YELLOW}没有运行中的独立进程${NC}"
+        echo -e "${RED}GOST 状态: 未安装${NC}"
     fi
     echo -e "${BLUE}========================================${NC}"
-    safe_read "${GREEN}按任意键返回菜单...${NC}" dummy
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
 }
 
-# ========== 停止服务 ==========
-stop_service() {
+show_sub() {
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}          停止服务${NC}"
+    echo -e "${GREEN}          节点信息${NC}"
     echo -e "${BLUE}========================================${NC}"
-    echo -e "  ${GREEN}1${NC}) 停止单进程服务"
-    echo -e "  ${GREEN}2${NC}) 停止指定独立进程"
-    echo -e "  ${GREEN}3${NC}) 停止所有 GOST 进程"
-    echo -e "  ${GREEN}0${NC}) 返回"
-    safe_read "${YELLOW}请输入 [0-3]: ${NC}" opt
-    case $opt in
-        1)
-            stop_single_gost
-            ;;
-        2)
-            local pids=()
-            local descs=()
-            for pidfile in "$PID_DIR"/*.pid; do
-                if [ -f "$pidfile" ]; then
-                    local pid
-                    pid=$(cat "$pidfile")
-                    if kill -0 "$pid" 2>/dev/null; then
-                        local infofile="${pidfile%.pid}.info"
-                        local desc=""
-                        [ -f "$infofile" ] && desc=$(cat "$infofile")
-                        pids+=("$pid")
-                        descs+=("$desc")
-                    else
-                        rm -f "$pidfile" "$infofile"
-                    fi
-                fi
-            done
-            if [ ${#pids[@]} -eq 0 ]; then
-                echo -e "${YELLOW}没有运行中的独立进程${NC}"
-                safe_read "${GREEN}按任意键返回...${NC}" dummy
-                return
-            fi
-            echo -e "${YELLOW}请选择要停止的进程:${NC}"
-            for i in "${!pids[@]}"; do
-                echo "  $((i+1))) PID ${pids[$i]} - ${descs[$i]}"
-            done
-            safe_read "${YELLOW}请输入数字: ${NC}" idx
-            if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -le ${#pids[@]} ]; then
-                local target_pid=${pids[$((idx-1))]}
-                kill "$target_pid" 2>/dev/null || true
-                for pidfile in "$PID_DIR"/*.pid; do
-                    if [ -f "$pidfile" ] && [ "$(cat "$pidfile")" -eq "$target_pid" ]; then
-                        rm -f "$pidfile" "${pidfile%.pid}.info"
-                        break
-                    fi
-                done
-                echo -e "${GREEN}已停止 PID $target_pid${NC}"
-            else
-                echo -e "${RED}无效选择${NC}"
-            fi
-            ;;
-        3)
-            stop_all_gost
-            ;;
-        *)
-            return
-            ;;
-    esac
-    safe_read "${GREEN}按任意键返回...${NC}" dummy
-}
-
-# ========== 其他功能 ==========
-uninstall_gost() {
-    echo -e "${YELLOW}正在卸载 GOST...${NC}"
-    stop_all_gost
-    crontab -l 2>/dev/null | grep -v "$GOST_DIR" | crontab - 2>/dev/null || true
-    rm -rf "$GOST_DIR"
-    echo -e "${GREEN}✓ 卸载完成${NC}"
-    safe_read "${GREEN}按任意键返回...${NC}" dummy
+    if [ -f "$SUBFILE" ] && [ -s "$SUBFILE" ]; then
+        echo -e "${YELLOW}$(cat "$SUBFILE")${NC}"
+    else
+        echo -e "${RED}暂无节点信息，请先配置代理。${NC}"
+    fi
+    echo -e "${BLUE}========================================${NC}"
+    echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+    read -n 1
 }
 
 update_script() {
@@ -865,7 +891,8 @@ update_script() {
             echo -e "${GREEN}✓ 脚本更新成功！${NC}"
             echo -e "${YELLOW}请重新运行脚本以使用新版本。${NC}"
             echo -e "${YELLOW}快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
-            safe_read "${GREEN}按任意键退出...${NC}" dummy
+            echo -n -e "${GREEN}按任意键退出...${NC}"
+            read -n 1
             exit 0
         else
             echo -e "${RED}下载的文件为空，更新失败${NC}"
@@ -875,78 +902,54 @@ update_script() {
         echo -e "${YELLOW}请手动执行以下命令更新脚本：${NC}"
         echo -e "${GREEN}curl -fsSL ${script_url} -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh${NC}"
         echo -e "${YELLOW}然后重新运行 ~/gost-manager.sh${NC}"
-        safe_read "${GREEN}按任意键退出...${NC}" dummy
+        echo -n -e "${GREEN}按任意键退出...${NC}"
+        read -n 1
         exit 1
     fi
-    safe_read "${GREEN}按任意键退出...${NC}" dummy
+    echo -n -e "${GREEN}按任意键退出...${NC}"
+    read -n 1
     exit 1
 }
 
-show_sub() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}          节点信息${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    if [ -f "$SUBFILE" ] && [ -s "$SUBFILE" ]; then
-        cat "$SUBFILE"
-    else
-        echo -e "${RED}暂无节点信息，请先配置代理。${NC}"
-    fi
-    echo -e "${BLUE}========================================${NC}"
-    safe_read "${GREEN}按任意键返回菜单...${NC}" dummy
-}
-
-# ========== 主菜单 ==========
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║        GOST 一键管理脚本            ║${NC}"
     echo -e "${BLUE}╠══════════════════════════════════════╣${NC}"
     echo -e "${BLUE}║  ${GREEN}1${BLUE}) 安装 GOST                       ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}2${BLUE}) 配置代理（替换现有）           ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}2${BLUE}) 配置代理                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}3${BLUE}) 查看状态                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}4${BLUE}) 卸载 GOST                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}6${BLUE}) 查看节点信息                   ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}7${NC}) 停止服务                       ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}8${NC}) 添加服务                       ║${NC}"
-    echo -e "${BLUE}║  ${GREEN}0${NC}) 退出                           ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}7${BLUE}) 停止 GOST                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo -n -e "${YELLOW}请输入 [0-8]: ${NC}"
+    echo -n -e "${YELLOW}请输入 [0-7]: ${NC}"
 }
 
-# ========== 入口 ==========
 main() {
     detect_os_arch
-    if [ -f "$START_CMD_FILE" ] && [ -s "$START_CMD_FILE" ] && [ ! -f "$GOST_PID_FILE" ]; then
-        echo -e "${YELLOW}检测到已有配置但未运行，是否现在启动？[y/N]${NC}"
-        read -r start_now
-        if [[ "$start_now" =~ ^[Yy]$ ]]; then
-            restart_gost_single
-        fi
-    fi
     while true; do
         show_menu
-        read -r choice
+        read choice
         case $choice in
-            1)
-                if select_version_to_install; then
-                    if [ -f "$GOST_BIN" ]; then
-                        echo
-                        echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
-                        read -r config_now
-                        if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
-                            configure_proxy
-                        fi
-                    fi
-                fi
-                ;;
+            1) if select_version_to_install; then
+                   if [ -f "$GOST_BIN" ]; then
+                       echo
+                       echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
+                       read config_now
+                       if [[ -z "$config_now" ]] || [[ "$config_now" =~ ^[Yy]$ ]]; then
+                           configure_proxy "auto"
+                       fi
+                   fi
+               fi ;;
             2) configure_proxy ;;
             3) show_status ;;
-            4) uninstall_gost ;;
+            4) uninstall_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             5) update_script ;;
             6) show_sub ;;
-            7) stop_service ;;
-            8) add_service ;;
+            7) stop_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
         esac
