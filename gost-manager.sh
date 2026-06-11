@@ -944,6 +944,39 @@ show_sub() {
     read -n 1
 }
 
+# 查看日志
+view_log() {
+    if [ ! -f "$GOST_LOG" ]; then
+        echo -e "${RED}日志文件不存在: ${GOST_LOG}${NC}"
+        echo -n -e "${GREEN}按任意键返回...${NC}"
+        read -n 1
+        return
+    fi
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}          查看日志${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -n -e "${YELLOW}请输入显示行数 (默认 50): ${NC}"
+    read lines
+    if [[ -z "$lines" ]]; then
+        lines=50
+    elif ! [[ "$lines" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}无效输入，使用默认 50 行${NC}"
+        lines=50
+    fi
+    echo -e "${GREEN}--- 最后 ${lines} 行日志 ---${NC}"
+    tail -n "$lines" "$GOST_LOG"
+    echo -e "${BLUE}========================================${NC}"
+    echo -n -e "${YELLOW}是否实时跟踪日志？[y/N]: ${NC}"
+    read follow
+    if [[ "$follow" =~ ^[Yy]$ ]]; then
+        echo -e "${GREEN}正在实时跟踪日志，按 Ctrl+C 退出...${NC}"
+        tail -f "$GOST_LOG"
+    else
+        echo -n -e "${GREEN}按任意键返回菜单...${NC}"
+        read -n 1
+    fi
+}
+
 # 更新脚本
 update_script() {
     echo -e "${BLUE}========================================${NC}"
@@ -995,9 +1028,10 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}5${BLUE}) 更新脚本                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}6${BLUE}) 查看节点信息                   ║${NC}"
     echo -e "${BLUE}║  ${GREEN}7${BLUE}) 停止 GOST                       ║${NC}"
+    echo -e "${BLUE}║  ${GREEN}8${BLUE}) 查看日志                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo -n -e "${YELLOW}请输入 [0-7]: ${NC}"
+    echo -n -e "${YELLOW}请输入 [0-8]: ${NC}"
 }
 
 # 主程序
@@ -1023,6 +1057,7 @@ main() {
             5) update_script ;;
             6) show_sub ;;
             7) stop_gost; echo -n -e "${GREEN}按任意键返回菜单...${NC}"; read -n 1 ;;
+            8) view_log ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
         esac
