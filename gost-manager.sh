@@ -117,18 +117,6 @@ merge_queries() {
     echo "${base}&${dns#\?}"
 }
 
-generate_v2ray_ss_ws_base64() {
-    local method="$1" pass="$2" host="$3" port="$4" path="$5" name="$6" ws_host="$7"
-    local json="{\"add\":\"${host}\",\"aid\":\"0\",\"alpn\":\"\",\"fp\":\"\",\"host\":\"${ws_host:-$host}\",\"id\":\"\",\"net\":\"ws\",\"path\":\"${path:-/}\",\"port\":\"${port}\",\"ps\":\"${name}\",\"scy\":\"auto\",\"sni\":\"\",\"tls\":\"\",\"type\":\"none\",\"v\":\"2\"}"
-    if command -v base64 >/dev/null 2>&1; then
-        echo -n "$json" | base64 -w 0 2>/dev/null || echo -n "$json" | base64
-    elif command -v openssl >/dev/null 2>&1; then
-        echo -n "$json" | openssl base64 -A 2>/dev/null
-    else
-        echo ""
-    fi
-}
-
 stop_gost() {
     if pgrep -f "$GOST_BIN" >/dev/null 2>&1; then
         echo -e "${YELLOW}正在停止 GOST...${NC}"
@@ -413,11 +401,19 @@ configure_websocket() {
     [ -n "$GOST_WS_PATH" ] && info="${info}${GOST_WS_PATH}"
     [ -n "$dns_input" ] && info="${info} (DNS: ${dns_input})"
 
+    # 为 SS+WS 组合生成 Base64
     if [[ "$proto_combo" == "ss+ws" ]]; then
-        local v2ray_b64=$(generate_v2ray_ss_ws_base64 "$ss_method" "$ss_pass" "$ip" "$port" "${GOST_WS_PATH:-/}" "${ss_name}" "")
-        if [ -n "$v2ray_b64" ]; then
-            local v2ray_link="ss://${v2ray_b64}"
-            info="${info}\nV2Ray Base64: ${v2ray_link}"
+        local ss_base="${ss_method}:${ss_pass}@${ip}:${port}"
+        local ss_b64=""
+        if command -v base64 >/dev/null 2>&1; then
+            ss_b64=$(echo -n "$ss_base" | base64 -w 0 2>/dev/null || echo -n "$ss_base" | base64)
+        elif command -v openssl >/dev/null 2>&1; then
+            ss_b64=$(echo -n "$ss_base" | openssl base64 -A 2>/dev/null)
+        fi
+        if [ -n "$ss_b64" ]; then
+            local ss_link="ss://${ss_b64}"
+            [ -n "$ss_name" ] && ss_link="${ss_link}#${ss_name}"
+            info="${info}\nBase64: ${ss_link}"
         fi
     fi
 
@@ -864,18 +860,16 @@ update_script() {
             echo -e "${YELLOW}请重新运行脚本，快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
             flush_input; read -n 1 -p "按任意键退出..."; exit 0
         else
-            echo -e "${RED}下载的文件为空，更新失败${NC}"
+            echo -e "${RED}下载的文件为空，更新失败。${NC}"
         fi
     else
         echo -e "${RED}自动下载失败，可能是网络问题。${NC}"
     fi
     echo -e "${YELLOW}请手动执行以下命令更新脚本：${NC}"
     echo -e "${GREEN}curl -fsSL ${url} -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh${NC}"
-    echo -e "${YELLOW}或使用 wget：${NC}"
-    echo -e "${GREEN}wget -q --timeout=30 -O ~/gost-manager.sh ${url} && chmod +x ~/gost-manager.sh${NC}"
     echo -e "${YELLOW}然后重新运行 ${GREEN}~/gost-manager.sh${NC}"
     flush_input; read -n 1 -p "按任意键退出..."
-    exit 1
+    return 1
 }
 
 show_menu() {
