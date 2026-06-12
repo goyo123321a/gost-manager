@@ -21,6 +21,12 @@ check_required_tools() {
 }
 check_required_tools
 
+# 清空输入缓冲区（防止残留按键干扰）
+flush_input() {
+    local leftover
+    while read -r -t 0.01 leftover 2>/dev/null; do :; done
+}
+
 # ---------- 本机 IP ----------
 get_local_ip() {
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
@@ -131,6 +137,7 @@ check_existing_gost() {
         fi
         echo -n -e "${YELLOW}是否覆盖安装？[y/N]: ${NC}"
         read ans
+        flush_input
         if [[ "$ans" =~ ^[Yy]$ ]]; then
             pgrep -f "$GOST_BIN" >/dev/null 2>&1 && stop_gost
             return 0
@@ -183,11 +190,11 @@ install_gost_v2() {
         done
     fi
     if [ $downloaded -eq 0 ]; then
-        echo -e "${RED}下载失败。${NC}"; read -n 1 -p "按任意键退出..."; return 1
+        echo -e "${RED}下载失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; return 1
     fi
     chmod +x gost
     [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ] && echo -e "${GREEN}✓ 安装成功${NC}" && "$GOST_BIN" -V 2>&1 | head -1 && return 0
-    echo -e "${RED}安装失败。${NC}"; read -n 1 -p "按任意键退出..."; return 1
+    echo -e "${RED}安装失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; return 1
 }
 
 install_gost_v3() {
@@ -204,7 +211,7 @@ install_gost_v3() {
         chmod +x gost; rm -f gost.tar.gz
         [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ] && echo -e "${GREEN}✓ 安装成功${NC}" && return 0
     fi
-    echo -e "${RED}下载失败。${NC}"; read -n 1 -p "按任意键退出..."; return 1
+    echo -e "${RED}下载失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; return 1
 }
 
 get_v2_versions() {
@@ -214,7 +221,7 @@ get_v2_versions() {
     echo -e "${GREEN}可用的 v2 版本:${NC}"
     for i in "${!arr[@]}"; do echo "  $((i+1))) ${arr[$i]}"; done
     echo "  $((cnt+1))) 返回"
-    read -p "请选择 (默认 1): " choice
+    echo -n -e "${YELLOW}请选择 (默认 1): ${NC}"; read choice; flush_input
     [[ -z "$choice" ]] && choice=1
     [ "$choice" -eq $((cnt+1)) ] && return 1
     [ "$choice" -ge 1 ] && [ "$choice" -le "$cnt" ] && install_gost_v2 "${arr[$((choice-1))]}"
@@ -229,7 +236,7 @@ get_v3_versions() {
     echo -e "${GREEN}可用的 v3 稳定版:${NC}"
     for i in "${!arr[@]}"; do echo "  $((i+1))) ${arr[$i]}"; done
     echo "  $((cnt+1))) 返回"
-    read -p "请选择 (默认 1): " choice
+    echo -n -e "${YELLOW}请选择 (默认 1): ${NC}"; read choice; flush_input
     [[ -z "$choice" ]] && choice=1
     [ "$choice" -eq $((cnt+1)) ] && return 1
     [ "$choice" -ge 1 ] && [ "$choice" -le "$cnt" ] && install_gost_v3 "${arr[$((choice-1))]}"
@@ -242,7 +249,7 @@ select_version_to_install() {
     echo -e "  1) GOST v2"
     echo -e "  2) GOST v3"
     echo -e "  0) 返回"
-    read -p "请选择 [0-2]: " choice
+    echo -n -e "${YELLOW}请选择 [0-2]: ${NC}"; read choice; flush_input
     case $choice in
         1) get_v2_versions ;;
         2) get_v3_versions ;;
@@ -297,13 +304,13 @@ build_query_string() {
 configure_websocket() {
     local port
     while true; do
-        read -p "监听端口: " port
+        echo -n -e "${YELLOW}监听端口: ${NC}"; read port; flush_input
         [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && break
         echo -e "${RED}无效端口${NC}"
     done
 
     echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无路径): ${NC}"
-    read -p "路径: " path_input
+    echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
     local path=""
     [ -z "$path_input" ] && path="/ws"
     [ "$path_input" = "0" ] && path="" || path="$path_input"
@@ -317,7 +324,7 @@ configure_websocket() {
         echo -e " 2) SOCKS5 over WS"
         echo -e " 3) Shadowsocks over WS"
         echo -e " 4) 纯隧道"
-        read -p "请选择 [1-4] (默认 4): " combo
+        echo -n -e "${YELLOW}请选择 [1-4] (默认 4): ${NC}"; read combo; flush_input
         case $combo in
             1) proto_combo="http+ws"; proto_label="HTTP" ;;
             2) proto_combo="socks5+ws"; proto_label="SOCKS5" ;;
@@ -325,32 +332,36 @@ configure_websocket() {
             *) proto_combo="" ;;
         esac
         if [[ "$proto_combo" == "http+ws" || "$proto_combo" == "socks5+ws" ]]; then
-            read -p "是否需要认证？[y/N]: " need_auth
+            echo -n -e "${YELLOW}是否需要认证？[y/N]: ${NC}"; read need_auth; flush_input
             if [[ "$need_auth" =~ ^[Yy]$ ]]; then
                 while true; do
-                    read -p "用户名: " combo_user; read -p "密码: " combo_pass
+                    echo -n -e "${YELLOW}用户名: ${NC}"; read combo_user
+                    echo -n -e "${YELLOW}密码: ${NC}"; read combo_pass
                     [[ "$combo_user" =~ [:@/] || "$combo_pass" =~ [:@/] ]] && echo -e "${RED}不能包含 :@/${NC}" || break
                 done
+                flush_input
             fi
         elif [[ "$proto_combo" == "ss+ws" ]]; then
             local methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
             echo -e "选择加密: 1) aes-256-gcm 2) aes-128-gcm 3) chacha20-ietf-poly1305"
-            read -p "默认 1: " mch; [ -z "$mch" ] && mch=1
+            echo -n -e "${YELLOW}默认 1: ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
             ss_method="${methods[$((mch-1))]}" 2>/dev/null || ss_method="aes-256-gcm"
             while true; do
-                read -p "密码: " ss_pass; [ -z "$ss_pass" ] && ss_pass="123456"
+                echo -n -e "${YELLOW}密码: ${NC}"; read ss_pass; flush_input
+                [ -z "$ss_pass" ] && ss_pass="123456"
                 [[ "$ss_pass" =~ [:@/] ]] && echo -e "${RED}密码含特殊字符${NC}" || break
             done
-            read -p "节点名称 (默认 GOST-SS-WS): " ss_name; [ -z "$ss_name" ] && ss_name="GOST-SS-WS"
+            echo -n -e "${YELLOW}节点名称 (默认 GOST-SS-WS): ${NC}"; read ss_name; flush_input
+            [ -z "$ss_name" ] && ss_name="GOST-SS-WS"
         fi
     fi
 
     # DNS
     local dns_input=""
-    read -p "自定义 DNS？[y/N]: " use_dns
+    echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
     if [[ "$use_dns" =~ ^[Yy]$ ]]; then
         echo -e "格式: udp://8.8.8.8:53  tcp://8.8.8.8:53  tls://1.1.1.1:853  https://1.1.1.1/dns-query"
-        read -p "DNS 地址 (默认 https://1.1.1.1/dns-query): " dns_input
+        echo -n -e "${YELLOW}DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"; read dns_input; flush_input
         [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
     fi
     local resolver_arg=$(gost_resolver_arg "$dns_input")
@@ -394,14 +405,17 @@ configure_websocket() {
 # ---------- SSH 转发 ----------
 configure_ssh() {
     local local_listen="$1" local_proto="$2" local_listen_arg="$3"
-    read -p "SSH 服务器地址: " ssh_host; [ -z "$ssh_host" ] && { echo -e "${RED}地址不能为空${NC}"; return 1; }
-    read -p "SSH 端口 (默认 22): " ssh_port; [ -z "$ssh_port" ] && ssh_port=22
-    read -p "SSH 用户名: " ssh_user; [ -z "$ssh_user" ] && { echo -e "${RED}用户名不能为空${NC}"; return 1; }
+    echo -n -e "${YELLOW}SSH 服务器地址: ${NC}"; read ssh_host; flush_input
+    [ -z "$ssh_host" ] && { echo -e "${RED}地址不能为空${NC}"; return 1; }
+    echo -n -e "${YELLOW}SSH 端口 (默认 22): ${NC}"; read ssh_port; flush_input
+    [ -z "$ssh_port" ] && ssh_port=22
+    echo -n -e "${YELLOW}SSH 用户名: ${NC}"; read ssh_user; flush_input
+    [ -z "$ssh_user" ] && { echo -e "${RED}用户名不能为空${NC}"; return 1; }
     echo -e "认证方式: 1) 密码  2) 密钥"
-    read -p "选择: " auth_type
+    echo -n -e "${YELLOW}选择: ${NC}"; read auth_type; flush_input
     local ssh_auth=""
     if [ "$auth_type" = "1" ]; then
-        read -s -p "密码: " ssh_pass; echo
+        echo -n -e "${YELLOW}密码: ${NC}"; read -s ssh_pass; echo; flush_input
         [[ "$ssh_user" =~ [:@/] || "$ssh_pass" =~ [:@/] ]] && { echo -e "${RED}用户名/密码含特殊字符${NC}"; return 1; }
         ssh_auth="${ssh_user}:${ssh_pass}"
     else
@@ -416,7 +430,7 @@ configure_ssh() {
 # ---------- 链式代理 ----------
 configure_chain() {
     echo -e "${BLUE}本地代理类型:${NC} 1) HTTP  2) SOCKS5"
-    read -p "选择 [1-2]: " local_type
+    echo -n -e "${YELLOW}选择 [1-2]: ${NC}"; read local_type; flush_input
     local local_proto="http"
     case $local_type in
         1) local_proto="http" ;;
@@ -426,19 +440,20 @@ configure_chain() {
 
     local local_port
     while true; do
-        read -p "本地监听端口: " local_port
+        echo -n -e "${YELLOW}本地监听端口: ${NC}"; read local_port; flush_input
         [[ "$local_port" =~ ^[0-9]+$ ]] && [ "$local_port" -ge 1 ] && [ "$local_port" -le 65535 ] && break
         echo -e "${RED}无效端口${NC}"
     done
 
-    read -p "本地是否需要认证？[y/N]: " local_auth
+    echo -n -e "${YELLOW}本地是否需要认证？[y/N]: ${NC}"; read local_auth; flush_input
     local local_user="" local_pass=""
     if [[ "$local_auth" =~ ^[Yy]$ ]]; then
         while true; do
-            read -p "本地用户名 (默认 admin): " local_user; [ -z "$local_user" ] && local_user="admin"
-            read -p "本地密码 (默认 123456): " local_pass; [ -z "$local_pass" ] && local_pass="123456"
+            echo -n -e "${YELLOW}本地用户名 (默认 admin): ${NC}"; read local_user
+            echo -n -e "${YELLOW}本地密码 (默认 123456): ${NC}"; read local_pass
             [[ "$local_user" =~ [:@/] || "$local_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符，重输${NC}" || break
         done
+        flush_input
     fi
 
     local local_listen=""
@@ -451,15 +466,14 @@ configure_chain() {
     fi
 
     echo -e "${YELLOW}远程转发模式:${NC} 1) WebSocket  2) SSH"
-    read -p "选择 [1-2]: " remote_mode
+    echo -n -e "${YELLOW}选择 [1-2]: ${NC}"; read remote_mode; flush_input
 
     case $remote_mode in
         1)
-            # v3 远程 WS 组合
             local remote_proto="ws" remote_user="" remote_pass="" remote_ss_method="" remote_ss_pass=""
             if is_v3; then
                 echo -e "${YELLOW}远程 WS 协议组合:${NC} 1) 纯隧道  2) HTTP over WS  3) SOCKS5 over WS  4) SS over WS"
-                read -p "选择 [1-4] (默认 1): " remote_combo
+                echo -n -e "${YELLOW}选择 [1-4] (默认 1): ${NC}"; read remote_combo; flush_input
                 case $remote_combo in
                     2) remote_proto="http+ws" ;;
                     3) remote_proto="socks5+ws" ;;
@@ -467,39 +481,45 @@ configure_chain() {
                     *) remote_proto="ws" ;;
                 esac
                 if [[ "$remote_proto" == "http+ws" || "$remote_proto" == "socks5+ws" ]]; then
-                    read -p "远程需要认证？[y/N]: " need_auth
+                    echo -n -e "${YELLOW}远程需要认证？[y/N]: ${NC}"; read need_auth; flush_input
                     if [[ "$need_auth" =~ ^[Yy]$ ]]; then
                         while true; do
-                            read -p "用户名: " remote_user; read -p "密码: " remote_pass
+                            echo -n -e "${YELLOW}用户名: ${NC}"; read remote_user
+                            echo -n -e "${YELLOW}密码: ${NC}"; read remote_pass
                             [[ "$remote_user" =~ [:@/] || "$remote_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
                         done
+                        flush_input
                     fi
                 elif [ "$remote_proto" = "ss+ws" ]; then
                     local methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
                     echo -e "加密: 1) aes-256-gcm 2) aes-128-gcm 3) chacha20-ietf-poly1305"
-                    read -p "选择 (默认 1): " mch; [ -z "$mch" ] && mch=1
+                    echo -n -e "${YELLOW}选择 (默认 1): ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
                     remote_ss_method="${methods[$((mch-1))]}" 2>/dev/null || remote_ss_method="aes-256-gcm"
                     while true; do
-                        read -p "密码: " remote_ss_pass; [ -z "$remote_ss_pass" ] && remote_ss_pass="123456"
+                        echo -n -e "${YELLOW}密码: ${NC}"; read remote_ss_pass; flush_input
+                        [ -z "$remote_ss_pass" ] && remote_ss_pass="123456"
                         [[ "$remote_ss_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
                     done
                 fi
             fi
 
-            read -p "远程服务器地址: " remote_host; [ -z "$remote_host" ] && { echo -e "${RED}不能为空${NC}"; return 1; }
-            read -p "远程端口: " remote_port
+            echo -n -e "${YELLOW}远程服务器地址: ${NC}"; read remote_host; flush_input
+            [ -z "$remote_host" ] && { echo -e "${RED}不能为空${NC}"; return 1; }
+            echo -n -e "${YELLOW}远程端口: ${NC}"; read remote_port; flush_input
             [[ ! "$remote_port" =~ ^[0-9]+$ || "$remote_port" -lt 1 || "$remote_port" -gt 65535 ]] && { echo -e "${RED}端口无效${NC}"; return 1; }
 
-            read -p "WebSocket 路径 (默认 /ws, 0=无): " path_input
+            echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无): ${NC}"
+            echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
             local path=""
             [ -z "$path_input" ] && path="/ws"
             [ "$path_input" = "0" ] && path="" || path="$path_input"
 
             local dns_input=""
-            read -p "自定义 DNS？[y/N]: " use_dns
+            echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
             if [[ "$use_dns" =~ ^[Yy]$ ]]; then
                 echo -e "格式: udp://8.8.8.8:53 tcp://8.8.8.8:53 tls://1.1.1.1:853 https://1.1.1.1/dns-query"
-                read -p "DNS 地址: " dns_input; [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
+                echo -n -e "${YELLOW}DNS 地址: ${NC}"; read dns_input; flush_input
+                [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
             fi
             local resolver_arg=$(gost_resolver_arg "$dns_input")
 
@@ -593,12 +613,12 @@ configure_proxy() {
     local skip_confirm=$1
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
         echo -e "${RED}未检测到 GOST，请先安装。${NC}"
-        read -p "是否现在安装？[y/N]: " ans
+        echo -n -e "${YELLOW}是否现在安装？[y/N]: ${NC}"; read ans; flush_input
         if [[ "$ans" =~ ^[Yy]$ ]]; then
-            select_version_to_install || { read -n 1 -p "按任意键返回..."; return 1; }
-            [ ! -f "$GOST_BIN" ] && { read -n 1 -p "安装失败..."; return 1; }
+            select_version_to_install || { flush_input; read -n 1 -p "按任意键返回..."; return 1; }
+            [ ! -f "$GOST_BIN" ] && { flush_input; read -n 1 -p "安装失败..."; return 1; }
         else
-            read -n 1 -p "按任意键返回..."; return 1
+            flush_input; read -n 1 -p "按任意键返回..."; return 1
         fi
     fi
 
@@ -608,8 +628,8 @@ configure_proxy() {
         if pgrep -f "$GOST_BIN" >/dev/null 2>&1; then
             echo -e "${YELLOW}运行中 PID: $(pgrep -f "$GOST_BIN" | head -1)，重新配置将停止旧进程。${NC}"
         fi
-        read -p "是否重新配置？[y/N]: " ans
-        [[ ! "$ans" =~ ^[Yy]$ ]] && { read -n 1 -p "按任意键返回..."; return 1; }
+        echo -n -e "${YELLOW}是否重新配置？[y/N]: ${NC}"; read ans; flush_input
+        [[ ! "$ans" =~ ^[Yy]$ ]] && { flush_input; read -n 1 -p "按任意键返回..."; return 1; }
     fi
 
     echo -e "${BLUE}========================================${NC}"
@@ -621,23 +641,24 @@ configure_proxy() {
     echo -e " 4) Shadowsocks"
     echo -e " 5) WebSocket"
     echo -e " 6) 链式代理"
-    read -p "请选择 [1-6]: " protocol
+    echo -n -e "${YELLOW}请选择 [1-6]: ${NC}"; read protocol; flush_input
     [[ ! "$protocol" =~ ^[1-6]$ ]] && protocol=3
 
     case $protocol in
         1|2|3|4)
             local port
             while true; do
-                read -p "端口: " port
+                echo -n -e "${YELLOW}端口: ${NC}"; read port; flush_input
                 [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] && break
                 echo -e "${RED}无效端口${NC}"
             done
             local username="admin" password="123456" method="aes-256-gcm" node_name=""
             local dns_input=""
-            read -p "自定义 DNS？[y/N]: " use_dns
+            echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
             if [[ "$use_dns" =~ ^[Yy]$ ]]; then
                 echo -e "格式: udp://8.8.8.8:53  tcp://8.8.8.8:53  tls://1.1.1.1:853  https://1.1.1.1/dns-query"
-                read -p "DNS 地址: " dns_input; [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
+                echo -n -e "${YELLOW}DNS 地址: ${NC}"; read dns_input; flush_input
+                [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
             fi
 
             if [ "$protocol" -eq 4 ]; then
@@ -649,21 +670,25 @@ configure_proxy() {
                     ss_names=("aes-256-gcm (推荐)" "aes-128-gcm" "chacha20-ietf-poly1305 (推荐)")
                     echo -e "${GREEN}支持 AEAD 加密${NC}"
                 else
-                    echo -e "${RED}版本低于 2.8，不支持 SS，请升级。${NC}"; read -n 1 -p "按任意键返回..."; return 1
+                    echo -e "${RED}版本低于 2.8，不支持 SS，请升级。${NC}"; flush_input; read -n 1 -p "按任意键返回..."; return 1
                 fi
                 for i in "${!ss_names[@]}"; do echo "  $((i+1))) ${ss_names[$i]}"; done
-                read -p "加密方式 (默认 1): " mch; [ -z "$mch" ] && mch=1
+                echo -n -e "${YELLOW}加密方式 (默认 1): ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
                 [[ "$mch" -ge 1 && "$mch" -le 3 ]] && method="${ss_methods[$((mch-1))]}" || method="aes-256-gcm"
                 while true; do
-                    read -p "密码 (默认 123456): " password; [ -z "$password" ] && password="123456"
+                    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read password; flush_input
+                    [ -z "$password" ] && password="123456"
                     [[ "$password" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
                 done
-                read -p "节点名称 (默认 GOST-SS): " node_name; [ -z "$node_name" ] && node_name="GOST-SS"
+                echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"; read node_name; flush_input
+                [ -z "$node_name" ] && node_name="GOST-SS"
                 start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name" "$dns_input"
             else
                 while true; do
-                    read -p "账号 [admin]: " username; [ -z "$username" ] && username="admin"
-                    read -p "密码 [123456]: " password; [ -z "$password" ] && password="123456"
+                    echo -n -e "${YELLOW}账号 [admin]: ${NC}"; read username; flush_input
+                    [ -z "$username" ] && username="admin"
+                    echo -n -e "${YELLOW}密码 [123456]: ${NC}"; read password; flush_input
+                    [ -z "$password" ] && password="123456"
                     [[ "$username" =~ [:@/] || "$password" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
                 done
                 start_gost_legacy "$protocol" "$port" "$username" "$password" "" "$dns_input"
@@ -673,28 +698,27 @@ configure_proxy() {
         6) configure_chain ;;
     esac
 
-    read -p "开启开机自启？[y/N]: " auto_start
+    echo -n -e "${YELLOW}开启开机自启？[y/N]: ${NC}"; read auto_start; flush_input
     [[ "$auto_start" =~ ^[Yy]$ ]] && enable_autostart
-    read -n 1 -p "按任意键返回菜单..."
+    flush_input; read -n 1 -p "按任意键返回菜单..."
 }
 
 # ---------- 自启 ----------
 enable_autostart() {
     local cron_now=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR")
-    cat > "$GOST_DIR/keepalive.sh" << 'EOF'
+    cat > "$GOST_DIR/keepalive.sh" << EOF
 #!/usr/bin/env bash
-GOST_DIR="%GOST_DIR%"
-cd "$GOST_DIR"
-if [ -f gost.pid ] && kill -0 $(cat gost.pid) 2>/dev/null; then exit 0; fi
-if ! pgrep -f "$GOST_DIR/gost" >/dev/null; then
+GOST_DIR="$GOST_DIR"
+cd "\$GOST_DIR"
+if [ -f gost.pid ] && kill -0 \$(cat gost.pid) 2>/dev/null; then exit 0; fi
+if ! pgrep -f "\$GOST_DIR/gost" >/dev/null; then
     if [ -f start_cmd.txt ]; then
-        cmd=$(cat start_cmd.txt)
-        eval "nohup $cmd >> gost.log 2>&1 &"
-        echo $! > gost.pid
+        cmd=\$(cat start_cmd.txt)
+        eval "nohup \$cmd >> gost.log 2>&1 &"
+        echo \$! > gost.pid
     fi
 fi
 EOF
-    sed -i "s|%GOST_DIR%|$GOST_DIR|" "$GOST_DIR/keepalive.sh"
     chmod +x "$GOST_DIR/keepalive.sh"
     (echo "$cron_now"; echo "@reboot $GOST_DIR/keepalive.sh"; echo "*/5 * * * * $GOST_DIR/keepalive.sh") | crontab -
     echo -e "${GREEN}✓ 已配置自启和保活${NC}"
@@ -726,7 +750,7 @@ show_status() {
     else
         echo -e "${RED}GOST 未安装${NC}"
     fi
-    read -n 1 -p "按任意键返回..."
+    flush_input; read -n 1 -p "按任意键返回..."
 }
 
 show_sub() {
@@ -738,16 +762,20 @@ show_sub() {
     else
         echo -e "${RED}暂无节点信息${NC}"
     fi
-    read -n 1 -p "按任意键返回..."
+    flush_input; read -n 1 -p "按任意键返回..."
 }
 
 view_log() {
-    [ ! -f "$GOST_LOG" ] && { echo -e "${RED}日志文件不存在${NC}"; read -n 1 -p "按任意键返回..."; return; }
-    read -p "显示行数 (默认 50): " lines
+    [ ! -f "$GOST_LOG" ] && { echo -e "${RED}日志文件不存在${NC}"; flush_input; read -n 1 -p "按任意键返回..."; return; }
+    echo -n -e "${YELLOW}显示行数 (默认 50): ${NC}"; read lines; flush_input
     [[ "$lines" =~ ^[0-9]+$ ]] || lines=50
     tail -n "$lines" "$GOST_LOG"
-    read -p "实时跟踪？[y/N]: " follow
-    [[ "$follow" =~ ^[Yy]$ ]] && tail -f "$GOST_LOG" || read -n 1 -p "按任意键返回..."
+    echo -n -e "${YELLOW}实时跟踪？[y/N]: ${NC}"; read follow; flush_input
+    if [[ "$follow" =~ ^[Yy]$ ]]; then
+        tail -f "$GOST_LOG"
+    else
+        flush_input; read -n 1 -p "按任意键返回..."
+    fi
 }
 
 update_script() {
@@ -758,10 +786,10 @@ update_script() {
         if [ -s "$tmp" ]; then
             cp "$tmp" "$0" && chmod +x "$0" && rm -f "$tmp"
             echo -e "${GREEN}✓ 更新成功，请重新运行脚本。${NC}"
-            read -n 1 -p "按任意键退出..."; exit 0
+            flush_input; read -n 1 -p "按任意键退出..."; exit 0
         fi
     fi
-    echo -e "${RED}更新失败。${NC}"; read -n 1 -p "按任意键退出..."; exit 1
+    echo -e "${RED}更新失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; exit 1
 }
 
 # ---------- 主菜单 ----------
@@ -780,26 +808,29 @@ show_menu() {
     echo -e "${BLUE}║  ${GREEN}8${BLUE}) 查看日志                       ║${NC}"
     echo -e "${BLUE}║  ${GREEN}0${BLUE}) 退出                           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    read -p "请输入 [0-8]: " choice
+    echo -n -e "${YELLOW}请输入 [0-8]: ${NC}"
 }
 
 main() {
     detect_os_arch
     while true; do
+        flush_input          # 清空缓冲区，避免残留按键干扰
         show_menu
         read choice
         case $choice in
             1) select_version_to_install
                if [ -f "$GOST_BIN" ]; then
-                   read -p "是否配置代理？[Y/n]: " config_now
+                   echo
+                   echo -n -e "${GREEN}是否配置代理？[Y/n]: ${NC}"
+                   read config_now; flush_input
                    [[ -z "$config_now" || "$config_now" =~ ^[Yy]$ ]] && configure_proxy "auto"
                fi ;;
             2) configure_proxy ;;
             3) show_status ;;
-            4) uninstall_gost; read -n 1 -p "按任意键返回..." ;;
+            4) uninstall_gost; flush_input; read -n 1 -p "按任意键返回..." ;;
             5) update_script ;;
             6) show_sub ;;
-            7) stop_gost; read -n 1 -p "按任意键返回..." ;;
+            7) stop_gost; flush_input; read -n 1 -p "按任意键返回..." ;;
             8) view_log ;;
             0) echo -e "${GREEN}再见！${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择${NC}"; sleep 1 ;;
