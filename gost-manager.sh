@@ -297,6 +297,13 @@ build_query_string() {
     [ -n "$q" ] && echo "?${q}"
 }
 
+# 辅助：确保路径以 / 开头
+ensure_leading_slash() {
+    local p="$1"
+    [ -z "$p" ] && return
+    [[ "$p" != /* ]] && echo "/$p" || echo "$p"
+}
+
 configure_websocket() {
     local port
     while true; do
@@ -306,16 +313,16 @@ configure_websocket() {
     done
 
     echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无路径): ${NC}"
-    echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
+    echo -n -e "${YELLOW}路径 (必须以 / 开头): ${NC}"; read path_input; flush_input
     GOST_WS_PATH=""
     if [ -z "$path_input" ]; then
         GOST_WS_PATH="/ws"
     elif [ "$path_input" = "0" ]; then
         GOST_WS_PATH=""
     else
-        GOST_WS_PATH="$path_input"
+        GOST_WS_PATH=$(ensure_leading_slash "$path_input")
+        echo -e "${GREEN}使用路径: ${GOST_WS_PATH}${NC}"
     fi
-    echo -e "${GREEN}当前路径: ${GOST_WS_PATH:-无}${NC}"
 
     local proto_combo="" proto_label=""
     local combo_user="" combo_pass="" ss_method="" ss_pass="" ss_name=""
@@ -514,14 +521,15 @@ configure_chain() {
             [[ ! "$remote_port" =~ ^[0-9]+$ || "$remote_port" -lt 1 || "$remote_port" -gt 65535 ]] && { echo -e "${RED}端口无效${NC}"; return 1; }
 
             echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无): ${NC}"
-            echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
+            echo -n -e "${YELLOW}路径 (必须以 / 开头): ${NC}"; read path_input; flush_input
             local remote_path=""
             if [ -z "$path_input" ]; then
                 remote_path="/ws"
             elif [ "$path_input" = "0" ]; then
                 remote_path=""
             else
-                remote_path="$path_input"
+                remote_path=$(ensure_leading_slash "$path_input")
+                echo -e "${GREEN}使用路径: ${remote_path}${NC}"
             fi
 
             local dns_input=""
@@ -574,32 +582,28 @@ start_gost_legacy() {
     local cmd="" proxy_url="" ip=$(get_local_ip)
 
     case $protocol in
-        1) # HTTP
-           if [ -n "$auth1" ]; then
+        1) if [ -n "$auth1" ]; then
                cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}${final_query}"
                proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
            else
                cmd="$GOST_BIN -L http://:${port}${final_query}"
                proxy_url="http://${ip}:${port}"
            fi ;;
-        2) # SOCKS5
-           if [ -n "$auth1" ]; then
+        2) if [ -n "$auth1" ]; then
                cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}${final_query}"
                proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
            else
                cmd="$GOST_BIN -L socks5://:${port}${final_query}"
                proxy_url="socks5://${ip}:${port}"
            fi ;;
-        3) # 自适应
-           if [ -n "$auth1" ]; then
+        3) if [ -n "$auth1" ]; then
                cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}${final_query}"
                proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
            else
                cmd="$GOST_BIN -L :${port}${final_query}"
                proxy_url="http://${ip}:${port} / socks5://${ip}:${port}"
            fi ;;
-        4) # Shadowsocks
-           cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${final_query}"
+        4) cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${final_query}"
            local ss_link="${auth1}:${auth2}@${ip}:${port}"
            local ss64=""
            command -v base64 >/dev/null && ss64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64) || ss64=$(echo -n "$ss_link" | openssl base64 -A)
@@ -684,7 +688,6 @@ configure_proxy() {
             done
             local username="admin" password="123456" method="aes-256-gcm" node_name=""
             local dns_input=""
-            # 认证询问（SS 强制需要，其他可选）
             if [ "$protocol" -ne 4 ]; then
                 echo -n -e "${YELLOW}是否需要认证？[Y/n]: ${NC}"; read need_auth; flush_input
                 if [[ "$need_auth" =~ ^[Nn]$ ]]; then
@@ -700,7 +703,6 @@ configure_proxy() {
                     done
                 fi
             else
-                # SS 协议强制认证，直接配置加密和密码
                 echo -e "${BLUE}Shadowsocks 配置${NC}"
                 local gost_ver=$(get_installed_gost_version)
                 local ss_methods=() ss_names=()
