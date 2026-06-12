@@ -21,9 +21,13 @@ check_required_tools() {
 }
 check_required_tools
 
+# 增强的输入缓冲区清理
 flush_input() {
+    # 先尝试读取所有未处理字符
     local leftover
     while read -r -t 0.01 leftover 2>/dev/null; do :; done
+    # 再尝试额外读取一秒（确保彻底清空）
+    read -t 0.1 -n 10000 leftover 2>/dev/null
 }
 
 get_local_ip() {
@@ -297,7 +301,6 @@ build_query_string() {
     [ -n "$q" ] && echo "?${q}"
 }
 
-# 辅助：确保路径以 / 开头
 ensure_leading_slash() {
     local p="$1"
     [ -z "$p" ] && return
@@ -605,11 +608,21 @@ start_gost_legacy() {
            fi ;;
         4) cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${final_query}"
            local ss_link="${auth1}:${auth2}@${ip}:${port}"
-           local ss64=""
-           command -v base64 >/dev/null && ss64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64) || ss64=$(echo -n "$ss_link" | openssl base64 -A)
+           # 生成 Base64，确保兼容性
+           local extra=""
+           if command -v base64 >/dev/null 2>&1; then
+               extra=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
+           elif command -v openssl >/dev/null 2>&1; then
+               extra=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
+           else
+               extra=""
+           fi
            proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
            [ -n "$name" ] && proxy_url="${proxy_url}#${name}"
-           local extra="ss://${ss64}"; [ -n "$name" ] && extra="${extra}#${name}"
+           if [ -n "$extra" ]; then
+               extra="ss://${extra}"
+               [ -n "$name" ] && extra="${extra}#${name}"
+           fi
            ;;
     esac
     [ -n "$dns_input" ] && proxy_url="${proxy_url} (DNS: ${dns_input})"
@@ -626,9 +639,14 @@ start_gost_legacy() {
         echo -e "${GREEN}✓ 运行中 (PID: $pid)${NC}"
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${GREEN}代理链接:${NC}\n${YELLOW}${proxy_url}${NC}"
-        if [ "$protocol" -eq 4 ] && [ -n "$extra" ]; then
-            echo -e "${GREEN}Base64:${NC}\n${YELLOW}${extra}${NC}"
-            save_node_info "${proxy_url}"$'\n'"Base64: ${extra}"
+        if [ "$protocol" -eq 4 ]; then
+            if [ -n "$extra" ]; then
+                echo -e "${GREEN}Base64:${NC}\n${YELLOW}${extra}${NC}"
+                save_node_info "${proxy_url}"$'\n'"Base64: ${extra}"
+            else
+                echo -e "${YELLOW}Base64 编码不可用，已保存普通链接${NC}"
+                save_node_info "$proxy_url"
+            fi
         else
             save_node_info "$proxy_url"
         fi
