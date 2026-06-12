@@ -320,8 +320,13 @@ configure_websocket() {
     echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无路径): ${NC}"
     echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
     local path=""
-    [ -z "$path_input" ] && path="/ws"
-    [ "$path_input" = "0" ] && path="" || path="$path_input"
+    if [ -z "$path_input" ]; then
+        path="/ws"
+    elif [ "$path_input" = "0" ]; then
+        path=""
+    else
+        path="$path_input"
+    fi
 
     local proto_combo="" proto_label=""
     local combo_user="" combo_pass="" ss_method="" ss_pass="" ss_name=""
@@ -506,12 +511,10 @@ configure_chain() {
                 fi
             fi
 
-            # wss 支持
             echo -n -e "${YELLOW}使用加密 WebSocket (wss)？[y/N]: ${NC}"; read use_wss; flush_input
             local ws_prefix="ws"
             if [[ "$use_wss" =~ ^[Yy]$ ]]; then
                 ws_prefix="wss"
-                # 更新协议后缀
                 if [ "$remote_proto" = "ws" ]; then
                     remote_proto="wss"
                 elif [[ "$remote_proto" =~ \+ws$ ]]; then
@@ -527,8 +530,13 @@ configure_chain() {
             echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无): ${NC}"
             echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
             local path=""
-            [ -z "$path_input" ] && path="/ws"
-            [ "$path_input" = "0" ] && path="" || path="$path_input"
+            if [ -z "$path_input" ]; then
+                path="/ws"
+            elif [ "$path_input" = "0" ]; then
+                path=""
+            else
+                path="$path_input"
+            fi
 
             local dns_input=""
             echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
