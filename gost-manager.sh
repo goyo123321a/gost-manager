@@ -269,7 +269,7 @@ start_gost_generic() {
     echo "=== GOST 启动于 $(date) ===" > "$GOST_LOG"
     echo "命令: $cmd" >> "$GOST_LOG"
     echo "信息: $info" >> "$GOST_LOG"
-    eval "nohup $cmd >> \"$GOST_LOG\" 2>&1 &"
+    nohup $cmd >> "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
     sleep 2
@@ -595,7 +595,7 @@ start_gost_legacy() {
     echo "=== GOST 启动于 $(date) ===" > "$GOST_LOG"
     echo "命令: $cmd" >> "$GOST_LOG"
     echo "信息: $proxy_url" >> "$GOST_LOG"
-    eval "nohup $cmd >> \"$GOST_LOG\" 2>&1 &"
+    nohup $cmd >> "$GOST_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$GOST_PID_FILE"
     sleep 2
@@ -725,7 +725,7 @@ if [ -f gost.pid ] && kill -0 \$(cat gost.pid) 2>/dev/null; then exit 0; fi
 if ! pgrep -f "\$GOST_DIR/gost" >/dev/null; then
     if [ -f start_cmd.txt ]; then
         cmd=\$(cat start_cmd.txt)
-        eval "nohup \$cmd >> gost.log 2>&1 &"
+        nohup \$cmd >> gost.log 2>&1 &
         echo \$! > gost.pid
     fi
 fi
