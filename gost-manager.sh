@@ -342,8 +342,10 @@ configure_websocket() {
             echo -n -e "${YELLOW}是否需要认证？[y/N]: ${NC}"; read need_auth; flush_input
             if [[ "$need_auth" =~ ^[Yy]$ ]]; then
                 while true; do
-                    echo -n -e "${YELLOW}用户名: ${NC}"; read combo_user
-                    echo -n -e "${YELLOW}密码: ${NC}"; read combo_pass
+                    echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read combo_user
+                    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read combo_pass
+                    [ -z "$combo_user" ] && combo_user="admin"
+                    [ -z "$combo_pass" ] && combo_pass="123456"
                     [[ "$combo_user" =~ [:@/] || "$combo_pass" =~ [:@/] ]] && echo -e "${RED}不能包含 :@/${NC}" || break
                 done
                 flush_input
@@ -354,7 +356,7 @@ configure_websocket() {
             echo -n -e "${YELLOW}默认 1: ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
             ss_method="${methods[$((mch-1))]}" 2>/dev/null || ss_method="aes-256-gcm"
             while true; do
-                echo -n -e "${YELLOW}密码: ${NC}"; read ss_pass; flush_input
+                echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read ss_pass; flush_input
                 [ -z "$ss_pass" ] && ss_pass="123456"
                 [[ "$ss_pass" =~ [:@/] ]] && echo -e "${RED}密码含特殊字符${NC}" || break
             done
@@ -448,6 +450,8 @@ configure_chain() {
         while true; do
             echo -n -e "${YELLOW}本地用户名 (默认 admin): ${NC}"; read local_user
             echo -n -e "${YELLOW}本地密码 (默认 123456): ${NC}"; read local_pass
+            [ -z "$local_user" ] && local_user="admin"
+            [ -z "$local_pass" ] && local_pass="123456"
             [[ "$local_user" =~ [:@/] || "$local_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符，重输${NC}" || break
         done
         flush_input
@@ -481,8 +485,10 @@ configure_chain() {
                     echo -n -e "${YELLOW}远程需要认证？[y/N]: ${NC}"; read need_auth; flush_input
                     if [[ "$need_auth" =~ ^[Yy]$ ]]; then
                         while true; do
-                            echo -n -e "${YELLOW}用户名: ${NC}"; read remote_user
-                            echo -n -e "${YELLOW}密码: ${NC}"; read remote_pass
+                            echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read remote_user
+                            echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read remote_pass
+                            [ -z "$remote_user" ] && remote_user="admin"
+                            [ -z "$remote_pass" ] && remote_pass="123456"
                             [[ "$remote_user" =~ [:@/] || "$remote_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
                         done
                         flush_input
@@ -493,14 +499,27 @@ configure_chain() {
                     echo -n -e "${YELLOW}选择 (默认 1): ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
                     remote_ss_method="${methods[$((mch-1))]}" 2>/dev/null || remote_ss_method="aes-256-gcm"
                     while true; do
-                        echo -n -e "${YELLOW}密码: ${NC}"; read remote_ss_pass; flush_input
+                        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read remote_ss_pass; flush_input
                         [ -z "$remote_ss_pass" ] && remote_ss_pass="123456"
                         [[ "$remote_ss_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
                     done
                 fi
             fi
 
-            echo -n -e "${YELLOW}远程服务器地址: ${NC}"; read remote_host; flush_input
+            # wss 支持
+            echo -n -e "${YELLOW}使用加密 WebSocket (wss)？[y/N]: ${NC}"; read use_wss; flush_input
+            local ws_prefix="ws"
+            if [[ "$use_wss" =~ ^[Yy]$ ]]; then
+                ws_prefix="wss"
+                # 更新协议后缀
+                if [ "$remote_proto" = "ws" ]; then
+                    remote_proto="wss"
+                elif [[ "$remote_proto" =~ \+ws$ ]]; then
+                    remote_proto="${remote_proto/\+ws/+wss}"
+                fi
+            fi
+
+            echo -n -e "${YELLOW}远程服务器地址 (仅主机名/IP，不含协议): ${NC}"; read remote_host; flush_input
             [ -z "$remote_host" ] && { echo -e "${RED}不能为空${NC}"; return 1; }
             echo -n -e "${YELLOW}远程端口: ${NC}"; read remote_port; flush_input
             [[ ! "$remote_port" =~ ^[0-9]+$ || "$remote_port" -lt 1 || "$remote_port" -gt 65535 ]] && { echo -e "${RED}端口无效${NC}"; return 1; }
@@ -522,14 +541,14 @@ configure_chain() {
 
             local remote_url=""
             case "$remote_proto" in
-                ws) remote_url="ws://${remote_host}:${remote_port}" ;;
-                http+ws|socks5+ws)
+                ws|wss) remote_url="${remote_proto}://${remote_host}:${remote_port}" ;;
+                http+ws|http+wss|socks5+ws|socks5+wss)
                     remote_url="${remote_proto}://"
                     [ -n "$remote_user" ] && remote_url="${remote_url}${remote_user}:${remote_pass}@"
                     remote_url="${remote_url}${remote_host}:${remote_port}"
                     ;;
-                ss+ws)
-                    remote_url="ss+ws://${remote_ss_method}:${remote_ss_pass}@${remote_host}:${remote_port}"
+                ss+ws|ss+wss)
+                    remote_url="${remote_proto}://${remote_ss_method}:${remote_ss_pass}@${remote_host}:${remote_port}"
                     ;;
             esac
             local params=(); [ -n "$path" ] && params+=("path=${path}")
