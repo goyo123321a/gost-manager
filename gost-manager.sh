@@ -319,14 +319,16 @@ configure_websocket() {
 
     echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无路径): ${NC}"
     echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
-    local path=""
+    # 使用全局风格变量避免被 local 干扰
+    GOST_WS_PATH=""
     if [ -z "$path_input" ]; then
-        path="/ws"
+        GOST_WS_PATH="/ws"
     elif [ "$path_input" = "0" ]; then
-        path=""
+        GOST_WS_PATH=""
     else
-        path="$path_input"
+        GOST_WS_PATH="$path_input"
     fi
+    echo -e "${GREEN}当前路径: ${GOST_WS_PATH:-无}${NC}"
 
     local proto_combo="" proto_label=""
     local combo_user="" combo_pass="" ss_method="" ss_pass="" ss_name=""
@@ -392,7 +394,8 @@ configure_websocket() {
         listen_addr="ws://:${port}"
     fi
 
-    local params=(); [ -n "$path" ] && params+=("path=${path}")
+    local params=()
+    [ -n "$GOST_WS_PATH" ] && params+=("path=${GOST_WS_PATH}")
     local query=$(build_query_string "${params[@]}")
     local dns_query=$(gost_dns_arg "$dns_input")
     local final_query=$(merge_queries "$query" "$dns_query")
@@ -401,7 +404,7 @@ configure_websocket() {
     local ip=$(get_local_ip)
     local info=""
     [ -n "$proto_combo" ] && info="${proto_label} over WebSocket: ${proto_combo}://${ip}:${port}" || info="WebSocket: ws://${ip}:${port}"
-    [ -n "$path" ] && info="${info}${path}"
+    [ -n "$GOST_WS_PATH" ] && info="${info}${GOST_WS_PATH}"
     [ -n "$dns_input" ] && info="${info} (DNS: ${dns_input})"
     start_gost_generic "$cmd" "$info"
 }
@@ -512,9 +515,7 @@ configure_chain() {
             fi
 
             echo -n -e "${YELLOW}使用加密 WebSocket (wss)？[y/N]: ${NC}"; read use_wss; flush_input
-            local ws_prefix="ws"
             if [[ "$use_wss" =~ ^[Yy]$ ]]; then
-                ws_prefix="wss"
                 if [ "$remote_proto" = "ws" ]; then
                     remote_proto="wss"
                 elif [[ "$remote_proto" =~ \+ws$ ]]; then
@@ -529,13 +530,13 @@ configure_chain() {
 
             echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无): ${NC}"
             echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
-            local path=""
+            local remote_path=""
             if [ -z "$path_input" ]; then
-                path="/ws"
+                remote_path="/ws"
             elif [ "$path_input" = "0" ]; then
-                path=""
+                remote_path=""
             else
-                path="$path_input"
+                remote_path="$path_input"
             fi
 
             local dns_input=""
@@ -559,7 +560,7 @@ configure_chain() {
                     remote_url="${remote_proto}://${remote_ss_method}:${remote_ss_pass}@${remote_host}:${remote_port}"
                     ;;
             esac
-            local params=(); [ -n "$path" ] && params+=("path=${path}")
+            local params=(); [ -n "$remote_path" ] && params+=("path=${remote_path}")
             local query=$(build_query_string "${params[@]}")
             local dns_query=$(gost_dns_arg "$dns_input")
             local final_query=$(merge_queries "$query" "$dns_query")
