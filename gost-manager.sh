@@ -21,12 +21,9 @@ check_required_tools() {
 }
 check_required_tools
 
-# 增强的输入缓冲区清理
 flush_input() {
-    # 先尝试读取所有未处理字符
     local leftover
     while read -r -t 0.01 leftover 2>/dev/null; do :; done
-    # 再尝试额外读取一秒（确保彻底清空）
     read -t 0.1 -n 10000 leftover 2>/dev/null
 }
 
@@ -315,18 +312,7 @@ configure_websocket() {
         echo -e "${RED}无效端口${NC}"
     done
 
-    echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无路径): ${NC}"
-    echo -n -e "${YELLOW}路径 (必须以 / 开头): ${NC}"; read path_input; flush_input
-    GOST_WS_PATH=""
-    if [ -z "$path_input" ]; then
-        GOST_WS_PATH="/ws"
-    elif [ "$path_input" = "0" ]; then
-        GOST_WS_PATH=""
-    else
-        GOST_WS_PATH=$(ensure_leading_slash "$path_input")
-        echo -e "${GREEN}使用路径: ${GOST_WS_PATH}${NC}"
-    fi
-
+    # 先收集组合协议信息，以决定路径默认值
     local proto_combo="" proto_label=""
     local combo_user="" combo_pass="" ss_method="" ss_pass="" ss_name=""
     if is_v3; then
@@ -369,6 +355,29 @@ configure_websocket() {
         fi
     fi
 
+    # 路径处理（根据协议决定默认值）
+    local path_default="/ws"
+    local path_prompt="WebSocket 路径 (默认 /ws, 0=无路径): "
+    if [[ "$proto_combo" == "ss+ws" ]]; then
+        path_default="0"
+        path_prompt="ss+ws 通常不需要路径，建议输入 0 (无路径): "
+    fi
+    echo -e "${YELLOW}${path_prompt}${NC}"
+    echo -n -e "${YELLOW}路径 (必须以 / 开头): ${NC}"; read path_input; flush_input
+    GOST_WS_PATH=""
+    if [ -z "$path_input" ]; then
+        if [ "$path_default" = "0" ]; then
+            GOST_WS_PATH=""
+        else
+            GOST_WS_PATH="$path_default"
+        fi
+    elif [ "$path_input" = "0" ]; then
+        GOST_WS_PATH=""
+    else
+        GOST_WS_PATH=$(ensure_leading_slash "$path_input")
+        echo -e "${GREEN}使用路径: ${GOST_WS_PATH}${NC}"
+    fi
+
     local dns_input=""
     echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
     if [[ "$use_dns" =~ ^[Yy]$ ]]; then
@@ -403,6 +412,23 @@ configure_websocket() {
     [ -n "$proto_combo" ] && info="${proto_label} over WebSocket: ${proto_combo}://${ip}:${port}" || info="WebSocket: ws://${ip}:${port}"
     [ -n "$GOST_WS_PATH" ] && info="${info}${GOST_WS_PATH}"
     [ -n "$dns_input" ] && info="${info} (DNS: ${dns_input})"
+
+    # 为 SS+WS 组合生成 Base64
+    if [[ "$proto_combo" == "ss+ws" ]]; then
+        local ss_base="${ss_method}:${ss_pass}@${ip}:${port}"
+        local ss_b64=""
+        if command -v base64 >/dev/null 2>&1; then
+            ss_b64=$(echo -n "$ss_base" | base64 -w 0 2>/dev/null || echo -n "$ss_base" | base64)
+        elif command -v openssl >/dev/null 2>&1; then
+            ss_b64=$(echo -n "$ss_base" | openssl base64 -A 2>/dev/null)
+        fi
+        if [ -n "$ss_b64" ]; then
+            local ss_link="ss://${ss_b64}"
+            [ -n "$ss_name" ] && ss_link="${ss_link}#${ss_name}"
+            info="${info}\nBase64: ${ss_link}"
+        fi
+    fi
+
     start_gost_generic "$cmd" "$info"
 }
 
@@ -608,14 +634,11 @@ start_gost_legacy() {
            fi ;;
         4) cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${final_query}"
            local ss_link="${auth1}:${auth2}@${ip}:${port}"
-           # 生成 Base64，确保兼容性
            local extra=""
            if command -v base64 >/dev/null 2>&1; then
                extra=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64)
            elif command -v openssl >/dev/null 2>&1; then
                extra=$(echo -n "$ss_link" | openssl base64 -A 2>/dev/null)
-           else
-               extra=""
            fi
            proxy_url="ss://${auth1}:${auth2}@${ip}:${port}"
            [ -n "$name" ] && proxy_url="${proxy_url}#${name}"
