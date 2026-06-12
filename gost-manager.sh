@@ -21,13 +21,11 @@ check_required_tools() {
 }
 check_required_tools
 
-# 清空输入缓冲区
 flush_input() {
     local leftover
     while read -r -t 0.01 leftover 2>/dev/null; do :; done
 }
 
-# ---------- 本机 IP ----------
 get_local_ip() {
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
     if [ -z "$ip" ]; then
@@ -39,7 +37,6 @@ get_local_ip() {
     echo "$ip"
 }
 
-# ---------- 工作目录 ----------
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -62,7 +59,6 @@ setup_workspace() {
 }
 setup_workspace
 
-# ---------- 系统/架构 ----------
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -79,7 +75,6 @@ detect_os_arch() {
     esac
 }
 
-# ---------- 版本相关 ----------
 get_installed_gost_version() {
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
@@ -108,14 +103,12 @@ version_ge() {
     return 0
 }
 
-# DNS 参数统一为 ?dns=xxx，v2/v3 通用
 gost_dns_arg() {
     local dns="$1"
     [ -z "$dns" ] && return
     echo "?dns=${dns}"
 }
 
-# 安全合并两个查询字符串
 merge_queries() {
     local base="$1" dns="$2"
     [ -z "$dns" ] && { echo "$base"; return; }
@@ -123,7 +116,6 @@ merge_queries() {
     echo "${base}&${dns#\?}"
 }
 
-# ---------- 停止与检查 ----------
 stop_gost() {
     if pgrep -f "$GOST_BIN" >/dev/null 2>&1; then
         echo -e "${YELLOW}正在停止 GOST...${NC}"
@@ -157,7 +149,6 @@ check_existing_gost() {
     fi
 }
 
-# ---------- 安装 ----------
 install_gost_v2() {
     local version=$1
     check_existing_gost || return 1
@@ -264,13 +255,11 @@ select_version_to_install() {
     esac
 }
 
-# ---------- 节点信息 ----------
 save_node_info() {
     printf "%s\n" "$1" > "$SUBFILE"
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
-# ---------- 通用启动 ----------
 start_gost_generic() {
     local cmd="$1" info="$2"
     cd "$GOST_DIR" || return 1
@@ -308,7 +297,6 @@ build_query_string() {
     [ -n "$q" ] && echo "?${q}"
 }
 
-# ---------- WebSocket ----------
 configure_websocket() {
     local port
     while true; do
@@ -319,7 +307,6 @@ configure_websocket() {
 
     echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无路径): ${NC}"
     echo -n -e "${YELLOW}路径: ${NC}"; read path_input; flush_input
-    # 使用全局风格变量避免被 local 干扰
     GOST_WS_PATH=""
     if [ -z "$path_input" ]; then
         GOST_WS_PATH="/ws"
@@ -409,7 +396,6 @@ configure_websocket() {
     start_gost_generic "$cmd" "$info"
 }
 
-# ---------- SSH 转发 ----------
 configure_ssh() {
     local local_listen="$1" local_proto="$2" local_listen_arg="$3"
     echo -n -e "${YELLOW}SSH 服务器地址: ${NC}"; read ssh_host; flush_input
@@ -434,7 +420,6 @@ configure_ssh() {
     start_gost_generic "$cmd" "$info"
 }
 
-# ---------- 链式代理 ----------
 configure_chain() {
     echo -e "${BLUE}本地代理类型:${NC} 1) HTTP  2) SOCKS5"
     echo -n -e "${YELLOW}选择 [1-2]: ${NC}"; read local_type; flush_input
@@ -566,7 +551,7 @@ configure_chain() {
             local final_query=$(merge_queries "$query" "$dns_query")
             remote_url="${remote_url}${final_query}"
 
-            local cmd="$GOST_BIN $local_listen -F \"$remote_url\""
+            local cmd="$GOST_BIN $local_listen -F $remote_url"
             local info="链式代理: ${local_proto}://${local_listen_arg} -> ${remote_url}"
             start_gost_generic "$cmd" "$info"
             ;;
@@ -579,7 +564,6 @@ configure_chain() {
     esac
 }
 
-# ---------- 传统协议 ----------
 start_gost_legacy() {
     local protocol=$1 port=$2 auth1=$3 auth2=$4 name=$5 dns_input=$6
     cd "$GOST_DIR" || return 1
@@ -636,7 +620,6 @@ start_gost_legacy() {
     fi
 }
 
-# ---------- 配置入口 ----------
 configure_proxy() {
     local skip_confirm=$1
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
@@ -732,7 +715,6 @@ configure_proxy() {
     flush_input; read -n 1 -p "按任意键返回菜单..."
 }
 
-# ---------- 自启 ----------
 enable_autostart() {
     local cron_now=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -753,7 +735,6 @@ EOF
     echo -e "${GREEN}✓ 已配置自启和保活${NC}"
 }
 
-# ---------- 卸载 ----------
 uninstall_gost() {
     echo -e "${YELLOW}卸载 GOST...${NC}"
     stop_gost
@@ -762,7 +743,6 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
-# ---------- 状态/节点/日志 ----------
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "          系统状态"
@@ -822,7 +802,6 @@ update_script() {
     echo -e "${RED}更新失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; exit 1
 }
 
-# ---------- 主菜单 ----------
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
