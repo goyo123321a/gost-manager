@@ -574,13 +574,32 @@ start_gost_legacy() {
     local cmd="" proxy_url="" ip=$(get_local_ip)
 
     case $protocol in
-        1) cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}${final_query}"
-           proxy_url="http://${auth1}:${auth2}@${ip}:${port}" ;;
-        2) cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}${final_query}"
-           proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}" ;;
-        3) cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}${final_query}"
-           proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}" ;;
-        4) cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${final_query}"
+        1) # HTTP
+           if [ -n "$auth1" ]; then
+               cmd="$GOST_BIN -L http://${auth1}:${auth2}@:${port}${final_query}"
+               proxy_url="http://${auth1}:${auth2}@${ip}:${port}"
+           else
+               cmd="$GOST_BIN -L http://:${port}${final_query}"
+               proxy_url="http://${ip}:${port}"
+           fi ;;
+        2) # SOCKS5
+           if [ -n "$auth1" ]; then
+               cmd="$GOST_BIN -L socks5://${auth1}:${auth2}@:${port}${final_query}"
+               proxy_url="socks5://${auth1}:${auth2}@${ip}:${port}"
+           else
+               cmd="$GOST_BIN -L socks5://:${port}${final_query}"
+               proxy_url="socks5://${ip}:${port}"
+           fi ;;
+        3) # 自适应
+           if [ -n "$auth1" ]; then
+               cmd="$GOST_BIN -L ${auth1}:${auth2}@:${port}${final_query}"
+               proxy_url="http://${auth1}:${auth2}@${ip}:${port} / socks5://${auth1}:${auth2}@${ip}:${port}"
+           else
+               cmd="$GOST_BIN -L :${port}${final_query}"
+               proxy_url="http://${ip}:${port} / socks5://${ip}:${port}"
+           fi ;;
+        4) # Shadowsocks
+           cmd="$GOST_BIN -L ss://${auth1}:${auth2}@:${port}${final_query}"
            local ss_link="${auth1}:${auth2}@${ip}:${port}"
            local ss64=""
            command -v base64 >/dev/null && ss64=$(echo -n "$ss_link" | base64 -w 0 2>/dev/null || echo -n "$ss_link" | base64) || ss64=$(echo -n "$ss_link" | openssl base64 -A)
@@ -665,15 +684,23 @@ configure_proxy() {
             done
             local username="admin" password="123456" method="aes-256-gcm" node_name=""
             local dns_input=""
-            echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
-            if [[ "$use_dns" =~ ^[Yy]$ ]]; then
-                echo -e "格式: udp://8.8.8.8:53  tcp://8.8.8.8:53  tls://1.1.1.1:853  https://1.1.1.1/dns-query"
-                echo -n -e "${YELLOW}DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
-                read dns_input; flush_input
-                [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
-            fi
-
-            if [ "$protocol" -eq 4 ]; then
+            # 认证询问（SS 强制需要，其他可选）
+            if [ "$protocol" -ne 4 ]; then
+                echo -n -e "${YELLOW}是否需要认证？[Y/n]: ${NC}"; read need_auth; flush_input
+                if [[ "$need_auth" =~ ^[Nn]$ ]]; then
+                    username=""
+                    password=""
+                else
+                    while true; do
+                        echo -n -e "${YELLOW}账号 (默认 admin): ${NC}"; read username; flush_input
+                        [ -z "$username" ] && username="admin"
+                        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read password; flush_input
+                        [ -z "$password" ] && password="123456"
+                        [[ "$username" =~ [:@/] || "$password" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
+                    done
+                fi
+            else
+                # SS 协议强制认证，直接配置加密和密码
                 echo -e "${BLUE}Shadowsocks 配置${NC}"
                 local gost_ver=$(get_installed_gost_version)
                 local ss_methods=() ss_names=()
@@ -694,15 +721,19 @@ configure_proxy() {
                 done
                 echo -n -e "${YELLOW}节点名称 (默认 GOST-SS): ${NC}"; read node_name; flush_input
                 [ -z "$node_name" ] && node_name="GOST-SS"
+            fi
+
+            echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
+            if [[ "$use_dns" =~ ^[Yy]$ ]]; then
+                echo -e "格式: udp://8.8.8.8:53  tcp://8.8.8.8:53  tls://1.1.1.1:853  https://1.1.1.1/dns-query"
+                echo -n -e "${YELLOW}DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+                read dns_input; flush_input
+                [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
+            fi
+
+            if [ "$protocol" -eq 4 ]; then
                 start_gost_legacy "$protocol" "$port" "$method" "$password" "$node_name" "$dns_input"
             else
-                while true; do
-                    echo -n -e "${YELLOW}账号 [admin]: ${NC}"; read username; flush_input
-                    [ -z "$username" ] && username="admin"
-                    echo -n -e "${YELLOW}密码 [123456]: ${NC}"; read password; flush_input
-                    [ -z "$password" ] && password="123456"
-                    [[ "$username" =~ [:@/] || "$password" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
-                done
                 start_gost_legacy "$protocol" "$port" "$username" "$password" "" "$dns_input"
             fi
             ;;
