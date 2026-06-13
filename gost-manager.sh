@@ -12,6 +12,7 @@ NC='\033[0m'
 
 SUBFILE="$HOME/sub.txt"
 
+# ---------- 前置检查 ----------
 check_required_tools() {
     if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
         echo -e "${RED}错误: 需要 wget 或 curl，请安装后重试。${NC}"
@@ -20,12 +21,14 @@ check_required_tools() {
 }
 check_required_tools
 
+# 清空输入缓冲区
 flush_input() {
     local leftover
     while read -r -t 0.01 leftover 2>/dev/null; do :; done
     read -t 0.1 -n 10000 leftover 2>/dev/null
 }
 
+# 本机 IP
 get_local_ip() {
     local ip=$(ip -4 addr show 2>/dev/null | grep -o 'inet [0-9.]*' | grep -v '127.0.0.1' | head -1 | cut -d' ' -f2)
     if [ -z "$ip" ]; then
@@ -37,6 +40,7 @@ get_local_ip() {
     echo "$ip"
 }
 
+# 工作目录
 setup_workspace() {
     CURRENT_USER=$(whoami)
     if [[ "$CURRENT_USER" == "root" ]]; then
@@ -59,6 +63,7 @@ setup_workspace() {
 }
 setup_workspace
 
+# 系统/架构
 detect_os_arch() {
     case "$(uname -s)" in
         Linux)     os="linux" ;;
@@ -75,6 +80,7 @@ detect_os_arch() {
     esac
 }
 
+# 版本相关
 get_installed_gost_version() {
     if [ -f "$GOST_BIN" ] && [ -x "$GOST_BIN" ]; then
         local ver=$("$GOST_BIN" -V 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
@@ -103,12 +109,14 @@ version_ge() {
     return 0
 }
 
+# DNS 参数统一为 ?dns=xxx
 gost_dns_arg() {
     local dns="$1"
     [ -z "$dns" ] && return
     echo "?dns=${dns}"
 }
 
+# 安全合并两个查询字符串
 merge_queries() {
     local base="$1" dns="$2"
     [ -z "$dns" ] && { echo "$base"; return; }
@@ -116,6 +124,7 @@ merge_queries() {
     echo "${base}&${dns#\?}"
 }
 
+# 停止 GOST
 stop_gost() {
     if pgrep -f "$GOST_BIN" >/dev/null 2>&1; then
         echo -e "${YELLOW}正在停止 GOST...${NC}"
@@ -127,6 +136,7 @@ stop_gost() {
     [ -f "$GOST_PID_FILE" ] && rm -f "$GOST_PID_FILE"
 }
 
+# 检查已安装版本
 check_existing_gost() {
     local ver=$(get_installed_gost_version)
     if [ "$ver" != "未安装" ]; then
@@ -149,6 +159,7 @@ check_existing_gost() {
     fi
 }
 
+# 安装 v2
 install_gost_v2() {
     local version=$1
     check_existing_gost || return 1
@@ -194,6 +205,7 @@ install_gost_v2() {
     echo -e "${RED}安装失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; return 1
 }
 
+# 安装 v3
 install_gost_v3() {
     local version=$1
     check_existing_gost || return 1
@@ -211,6 +223,7 @@ install_gost_v3() {
     echo -e "${RED}下载失败。${NC}"; flush_input; read -n 1 -p "按任意键退出..."; return 1
 }
 
+# 获取 v2 版本列表
 get_v2_versions() {
     local versions=$(curl -s --connect-timeout 5 "https://api.github.com/repos/ginuerzh/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/' | head -10)
     [ -z "$versions" ] && versions="2.12.0 2.11.5 2.11.4 2.11.3 2.11.2 2.11.1 2.11.0 2.10.0 2.9.2"
@@ -224,6 +237,7 @@ get_v2_versions() {
     [ "$choice" -ge 1 ] && [ "$choice" -le "$cnt" ] && install_gost_v2 "${arr[$((choice-1))]}"
 }
 
+# 获取 v3 版本列表
 get_v3_versions() {
     local all=$(curl -s "https://api.github.com/repos/go-gost/gost/releases" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"(v[^"]+)".*/\1/')
     local versions=""
@@ -239,6 +253,7 @@ get_v3_versions() {
     [ "$choice" -ge 1 ] && [ "$choice" -le "$cnt" ] && install_gost_v3 "${arr[$((choice-1))]}"
 }
 
+# 选择版本
 select_version_to_install() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "        选择 GOST 版本"
@@ -255,11 +270,13 @@ select_version_to_install() {
     esac
 }
 
+# 保存节点信息
 save_node_info() {
     printf "%s\n" "$1" > "$SUBFILE"
     echo -e "${GREEN}节点信息已保存到: ${SUBFILE}${NC}"
 }
 
+# 通用启动函数
 start_gost_generic() {
     local cmd="$1" info="$2"
     cd "$GOST_DIR" || return 1
@@ -289,6 +306,7 @@ start_gost_generic() {
     fi
 }
 
+# 构建查询参数
 build_query_string() {
     local q=""; local sep=""
     for p in "$@"; do
@@ -297,12 +315,14 @@ build_query_string() {
     [ -n "$q" ] && echo "?${q}"
 }
 
+# 确保路径以 / 开头
 ensure_leading_slash() {
     local p="$1"
     [ -z "$p" ] && return
     [[ "$p" != /* ]] && echo "/$p" || echo "$p"
 }
 
+# WebSocket 配置
 configure_websocket() {
     local port
     while true; do
@@ -400,6 +420,7 @@ configure_websocket() {
     [ -n "$GOST_WS_PATH" ] && info="${info}${GOST_WS_PATH}"
     [ -n "$dns_input" ] && info="${info} (DNS: ${dns_input})"
 
+    # 为 SS+WS 组合生成 Base64
     if [[ "$proto_combo" == "ss+ws" ]]; then
         local ss_base="${ss_method}:${ss_pass}@${ip}:${port}"
         local ss_b64=""
@@ -418,6 +439,7 @@ configure_websocket() {
     start_gost_generic "$cmd" "$info"
 }
 
+# 链式代理配置 (HTTP/SOCKS5 -> WS/WSS)
 configure_chain() {
     echo -e "${BLUE}本地代理类型:${NC} 1) HTTP  2) SOCKS5"
     echo -n -e "${YELLOW}选择 [1-2]: ${NC}"; read local_type; flush_input
@@ -550,6 +572,7 @@ configure_chain() {
     start_gost_generic "$cmd" "$info"
 }
 
+# 传统协议启动 (HTTP/SOCKS5/自适应/Shadowsocks)
 start_gost_legacy() {
     local protocol=$1 port=$2 auth1=$3 auth2=$4 name=$5 dns_input=$6
     cd "$GOST_DIR" || return 1
@@ -633,6 +656,7 @@ start_gost_legacy() {
     fi
 }
 
+# 自定义命令
 custom_command() {
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
         echo -e "${RED}未检测到 GOST，请先安装。${NC}"
@@ -652,11 +676,12 @@ custom_command() {
     echo -e "${YELLOW}请输入完整的 GOST 命令行 (不需要包含 nohup 和重定向):${NC}"
     echo -e "${YELLOW}示例: gost -L http://:8080${NC}"
     echo -e "${YELLOW}示例: gost -L socks5://user:pass@:1080${NC}"
-    echo -e "${YELLOW}示例: gost -L relay://username:password@:12345${NC}"
+    echo -e "${YELLOW}示例: gost -L relay://username:password@:12345?dns=8.8.8.8:53 -F relay+tls://1.2.3.4:443?keepalive=true&ttl=5s${NC}"
     read -e custom_cmd
     flush_input
     [ -z "$custom_cmd" ] && { echo -e "${RED}命令不能为空${NC}"; flush_input; read -n 1 -p "按任意键返回..."; return 1; }
 
+    # 自动补全路径
     if [[ "$custom_cmd" == gost* ]]; then
         custom_cmd="${GOST_BIN}${custom_cmd#gost}"
     fi
@@ -664,6 +689,7 @@ custom_command() {
     start_gost_generic "$custom_cmd" "自定义命令"
 }
 
+# 配置代理主入口
 configure_proxy() {
     local skip_confirm=$1
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
@@ -771,6 +797,7 @@ configure_proxy() {
     flush_input; read -n 1 -p "按任意键返回菜单..."
 }
 
+# 开机自启
 enable_autostart() {
     local cron_now=$(crontab -l 2>/dev/null | grep -v "$GOST_DIR")
     cat > "$GOST_DIR/keepalive.sh" << EOF
@@ -791,6 +818,7 @@ EOF
     echo -e "${GREEN}✓ 已配置自启和保活${NC}"
 }
 
+# 卸载
 uninstall_gost() {
     echo -e "${YELLOW}卸载 GOST...${NC}"
     stop_gost
@@ -799,6 +827,7 @@ uninstall_gost() {
     echo -e "${GREEN}✓ 卸载完成${NC}"
 }
 
+# 查看状态
 show_status() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "          系统状态"
@@ -818,6 +847,7 @@ show_status() {
     flush_input; read -n 1 -p "按任意键返回..."
 }
 
+# 节点信息
 show_sub() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "          节点信息"
@@ -830,6 +860,7 @@ show_sub() {
     flush_input; read -n 1 -p "按任意键返回..."
 }
 
+# 查看日志
 view_log() {
     [ ! -f "$GOST_LOG" ] && { echo -e "${RED}日志文件不存在${NC}"; flush_input; read -n 1 -p "按任意键返回..."; return; }
     echo -n -e "${YELLOW}显示行数 (默认 50): ${NC}"; read lines; flush_input
@@ -843,6 +874,7 @@ view_log() {
     fi
 }
 
+# 更新脚本（失败和成功都退出）
 update_script() {
     local url="https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh"
     local tmp="/tmp/gost-manager-update.sh"
@@ -852,7 +884,8 @@ update_script() {
             cp "$tmp" "$0" && chmod +x "$0" && rm -f "$tmp"
             echo -e "${GREEN}✓ 更新成功！${NC}"
             echo -e "${YELLOW}请重新运行脚本，快速命令: ${GREEN}~/gost-manager.sh${NC} 或 ${GREEN}bash ~/gost-manager.sh${NC}"
-            flush_input; read -n 1 -p "按任意键退出..."; exit 0
+            flush_input; read -n 1 -p "按任意键退出..."
+            exit 0
         else
             echo -e "${RED}下载的文件为空，更新失败。${NC}"
         fi
@@ -863,9 +896,10 @@ update_script() {
     echo -e "${GREEN}curl -fsSL ${url} -o ~/gost-manager.sh && chmod +x ~/gost-manager.sh${NC}"
     echo -e "${YELLOW}然后重新运行 ${GREEN}~/gost-manager.sh${NC}"
     flush_input; read -n 1 -p "按任意键退出..."
-    return 1
+    exit 1
 }
 
+# 主菜单
 show_menu() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
@@ -884,6 +918,7 @@ show_menu() {
     echo -n -e "${YELLOW}请输入 [0-8]: ${NC}"
 }
 
+# 主程序
 main() {
     detect_os_arch
     while true; do
