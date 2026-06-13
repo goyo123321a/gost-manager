@@ -12,7 +12,6 @@ NC='\033[0m'
 
 SUBFILE="$HOME/sub.txt"
 
-# ---------- 前置检查 ----------
 check_required_tools() {
     if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
         echo -e "${RED}错误: 需要 wget 或 curl，请安装后重试。${NC}"
@@ -321,8 +320,8 @@ configure_websocket() {
         GOST_WS_PATH=""
     else
         GOST_WS_PATH=$(ensure_leading_slash "$path_input")
-        echo -e "${GREEN}使用路径: ${GOST_WS_PATH}${NC}"
     fi
+    echo -e "${GREEN}当前路径: ${GOST_WS_PATH:-无}${NC}"
 
     local proto_combo="" proto_label=""
     local combo_user="" combo_pass="" ss_method="" ss_pass="" ss_name=""
@@ -401,7 +400,6 @@ configure_websocket() {
     [ -n "$GOST_WS_PATH" ] && info="${info}${GOST_WS_PATH}"
     [ -n "$dns_input" ] && info="${info} (DNS: ${dns_input})"
 
-    # 为 SS+WS 组合生成 Base64
     if [[ "$proto_combo" == "ss+ws" ]]; then
         local ss_base="${ss_method}:${ss_pass}@${ip}:${port}"
         local ss_b64=""
@@ -417,30 +415,6 @@ configure_websocket() {
         fi
     fi
 
-    start_gost_generic "$cmd" "$info"
-}
-
-configure_ssh() {
-    local local_listen="$1" local_proto="$2" local_listen_arg="$3"
-    echo -n -e "${YELLOW}SSH 服务器地址: ${NC}"; read ssh_host; flush_input
-    [ -z "$ssh_host" ] && { echo -e "${RED}地址不能为空${NC}"; return 1; }
-    echo -n -e "${YELLOW}SSH 端口 (默认 22): ${NC}"; read ssh_port; flush_input
-    [ -z "$ssh_port" ] && ssh_port=22
-    echo -n -e "${YELLOW}SSH 用户名: ${NC}"; read ssh_user; flush_input
-    [ -z "$ssh_user" ] && { echo -e "${RED}用户名不能为空${NC}"; return 1; }
-    echo -e "认证方式: 1) 密码  2) 密钥"
-    echo -n -e "${YELLOW}选择: ${NC}"; read auth_type; flush_input
-    local ssh_auth=""
-    if [ "$auth_type" = "1" ]; then
-        echo -n -e "${YELLOW}密码: ${NC}"; read -s ssh_pass; echo; flush_input
-        [[ "$ssh_user" =~ [:@/] || "$ssh_pass" =~ [:@/] ]] && { echo -e "${RED}用户名/密码含特殊字符${NC}"; return 1; }
-        ssh_auth="${ssh_user}:${ssh_pass}"
-    else
-        ssh_auth="${ssh_user}"
-    fi
-    local forward_url="ssh://${ssh_auth}@${ssh_host}:${ssh_port}"
-    local cmd="$GOST_BIN $local_listen -F $forward_url"
-    local info="链式代理: ${local_proto}://${local_listen_arg} -> ssh://${ssh_user}@${ssh_host}:${ssh_port}"
     start_gost_generic "$cmd" "$info"
 }
 
@@ -483,110 +457,97 @@ configure_chain() {
         local_listen_arg=":${local_port}"
     fi
 
-    echo -e "${YELLOW}远程转发模式:${NC} 1) WebSocket  2) SSH"
-    echo -n -e "${YELLOW}选择 [1-2]: ${NC}"; read remote_mode; flush_input
-
-    case $remote_mode in
-        1)
-            local remote_proto="ws" remote_user="" remote_pass="" remote_ss_method="" remote_ss_pass=""
-            if is_v3; then
-                echo -e "${YELLOW}远程 WS 协议组合:${NC} 1) 纯隧道  2) HTTP over WS  3) SOCKS5 over WS  4) SS over WS"
-                echo -n -e "${YELLOW}选择 [1-4] (默认 1): ${NC}"; read remote_combo; flush_input
-                case $remote_combo in
-                    2) remote_proto="http+ws" ;;
-                    3) remote_proto="socks5+ws" ;;
-                    4) remote_proto="ss+ws" ;;
-                    *) remote_proto="ws" ;;
-                esac
-                if [[ "$remote_proto" == "http+ws" || "$remote_proto" == "socks5+ws" ]]; then
-                    echo -n -e "${YELLOW}远程需要认证？[y/N]: ${NC}"; read need_auth; flush_input
-                    if [[ "$need_auth" =~ ^[Yy]$ ]]; then
-                        while true; do
-                            echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read remote_user
-                            echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read remote_pass
-                            [ -z "$remote_user" ] && remote_user="admin"
-                            [ -z "$remote_pass" ] && remote_pass="123456"
-                            [[ "$remote_user" =~ [:@/] || "$remote_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
-                        done
-                        flush_input
-                    fi
-                elif [ "$remote_proto" = "ss+ws" ]; then
-                    local methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
-                    echo -e "加密: 1) aes-256-gcm 2) aes-128-gcm 3) chacha20-ietf-poly1305"
-                    echo -n -e "${YELLOW}选择 (默认 1): ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
-                    remote_ss_method="${methods[$((mch-1))]}" 2>/dev/null || remote_ss_method="aes-256-gcm"
-                    while true; do
-                        echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read remote_ss_pass; flush_input
-                        [ -z "$remote_ss_pass" ] && remote_ss_pass="123456"
-                        [[ "$remote_ss_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
-                    done
-                fi
+    local remote_proto="ws" remote_user="" remote_pass="" remote_ss_method="" remote_ss_pass=""
+    if is_v3; then
+        echo -e "${YELLOW}远程 WS 协议组合:${NC} 1) 纯隧道  2) HTTP over WS  3) SOCKS5 over WS  4) SS over WS"
+        echo -n -e "${YELLOW}选择 [1-4] (默认 1): ${NC}"; read remote_combo; flush_input
+        case $remote_combo in
+            2) remote_proto="http+ws" ;;
+            3) remote_proto="socks5+ws" ;;
+            4) remote_proto="ss+ws" ;;
+            *) remote_proto="ws" ;;
+        esac
+        if [[ "$remote_proto" == "http+ws" || "$remote_proto" == "socks5+ws" ]]; then
+            echo -n -e "${YELLOW}远程需要认证？[y/N]: ${NC}"; read need_auth; flush_input
+            if [[ "$need_auth" =~ ^[Yy]$ ]]; then
+                while true; do
+                    echo -n -e "${YELLOW}用户名 (默认 admin): ${NC}"; read remote_user
+                    echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read remote_pass
+                    [ -z "$remote_user" ] && remote_user="admin"
+                    [ -z "$remote_pass" ] && remote_pass="123456"
+                    [[ "$remote_user" =~ [:@/] || "$remote_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
+                done
+                flush_input
             fi
+        elif [ "$remote_proto" = "ss+ws" ]; then
+            local methods=("aes-256-gcm" "aes-128-gcm" "chacha20-ietf-poly1305")
+            echo -e "加密: 1) aes-256-gcm 2) aes-128-gcm 3) chacha20-ietf-poly1305"
+            echo -n -e "${YELLOW}选择 (默认 1): ${NC}"; read mch; flush_input; [ -z "$mch" ] && mch=1
+            remote_ss_method="${methods[$((mch-1))]}" 2>/dev/null || remote_ss_method="aes-256-gcm"
+            while true; do
+                echo -n -e "${YELLOW}密码 (默认 123456): ${NC}"; read remote_ss_pass; flush_input
+                [ -z "$remote_ss_pass" ] && remote_ss_pass="123456"
+                [[ "$remote_ss_pass" =~ [:@/] ]] && echo -e "${RED}含特殊字符${NC}" || break
+            done
+        fi
+    fi
 
-            echo -n -e "${YELLOW}使用加密 WebSocket (wss)？[y/N]: ${NC}"; read use_wss; flush_input
-            if [[ "$use_wss" =~ ^[Yy]$ ]]; then
-                if [ "$remote_proto" = "ws" ]; then
-                    remote_proto="wss"
-                elif [[ "$remote_proto" =~ \+ws$ ]]; then
-                    remote_proto="${remote_proto/\+ws/+wss}"
-                fi
-            fi
+    echo -n -e "${YELLOW}使用加密 WebSocket (wss)？[y/N]: ${NC}"; read use_wss; flush_input
+    if [[ "$use_wss" =~ ^[Yy]$ ]]; then
+        if [ "$remote_proto" = "ws" ]; then
+            remote_proto="wss"
+        elif [[ "$remote_proto" =~ \+ws$ ]]; then
+            remote_proto="${remote_proto/\+ws/+wss}"
+        fi
+    fi
 
-            echo -n -e "${YELLOW}远程服务器地址 (仅主机名/IP，不含协议): ${NC}"; read remote_host; flush_input
-            [ -z "$remote_host" ] && { echo -e "${RED}不能为空${NC}"; return 1; }
-            echo -n -e "${YELLOW}远程端口: ${NC}"; read remote_port; flush_input
-            [[ ! "$remote_port" =~ ^[0-9]+$ || "$remote_port" -lt 1 || "$remote_port" -gt 65535 ]] && { echo -e "${RED}端口无效${NC}"; return 1; }
+    echo -n -e "${YELLOW}远程服务器地址 (仅主机名/IP，不含协议): ${NC}"; read remote_host; flush_input
+    [ -z "$remote_host" ] && { echo -e "${RED}不能为空${NC}"; return 1; }
+    echo -n -e "${YELLOW}远程端口: ${NC}"; read remote_port; flush_input
+    [[ ! "$remote_port" =~ ^[0-9]+$ || "$remote_port" -lt 1 || "$remote_port" -gt 65535 ]] && { echo -e "${RED}端口无效${NC}"; return 1; }
 
-            echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无): ${NC}"
-            echo -n -e "${YELLOW}路径 (必须以 / 开头): ${NC}"; read path_input; flush_input
-            local remote_path=""
-            if [ -z "$path_input" ]; then
-                remote_path="/ws"
-            elif [ "$path_input" = "0" ]; then
-                remote_path=""
-            else
-                remote_path=$(ensure_leading_slash "$path_input")
-                echo -e "${GREEN}使用路径: ${remote_path}${NC}"
-            fi
+    echo -e "${YELLOW}WebSocket 路径 (默认 /ws, 0=无): ${NC}"
+    echo -n -e "${YELLOW}路径 (必须以 / 开头): ${NC}"; read path_input; flush_input
+    local remote_path=""
+    if [ -z "$path_input" ]; then
+        remote_path="/ws"
+    elif [ "$path_input" = "0" ]; then
+        remote_path=""
+    else
+        remote_path=$(ensure_leading_slash "$path_input")
+    fi
+    echo -e "${GREEN}当前路径: ${remote_path:-无}${NC}"
 
-            local dns_input=""
-            echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
-            if [[ "$use_dns" =~ ^[Yy]$ ]]; then
-                echo -e "格式: udp://8.8.8.8:53 tcp://8.8.8.8:53 tls://1.1.1.1:853 https://1.1.1.1/dns-query"
-                echo -n -e "${YELLOW}DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
-                read dns_input; flush_input
-                [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
-            fi
+    local dns_input=""
+    echo -n -e "${YELLOW}自定义 DNS？[y/N]: ${NC}"; read use_dns; flush_input
+    if [[ "$use_dns" =~ ^[Yy]$ ]]; then
+        echo -e "格式: udp://8.8.8.8:53 tcp://8.8.8.8:53 tls://1.1.1.1:853 https://1.1.1.1/dns-query"
+        echo -n -e "${YELLOW}DNS 地址 (默认 https://1.1.1.1/dns-query): ${NC}"
+        read dns_input; flush_input
+        [ -z "$dns_input" ] && dns_input="https://1.1.1.1/dns-query"
+    fi
 
-            local remote_url=""
-            case "$remote_proto" in
-                ws|wss) remote_url="${remote_proto}://${remote_host}:${remote_port}" ;;
-                http+ws|http+wss|socks5+ws|socks5+wss)
-                    remote_url="${remote_proto}://"
-                    [ -n "$remote_user" ] && remote_url="${remote_url}${remote_user}:${remote_pass}@"
-                    remote_url="${remote_url}${remote_host}:${remote_port}"
-                    ;;
-                ss+ws|ss+wss)
-                    remote_url="${remote_proto}://${remote_ss_method}:${remote_ss_pass}@${remote_host}:${remote_port}"
-                    ;;
-            esac
-            local params=(); [ -n "$remote_path" ] && params+=("path=${remote_path}")
-            local query=$(build_query_string "${params[@]}")
-            local dns_query=$(gost_dns_arg "$dns_input")
-            local final_query=$(merge_queries "$query" "$dns_query")
-            remote_url="${remote_url}${final_query}"
-
-            local cmd="$GOST_BIN $local_listen -F $remote_url"
-            local info="链式代理: ${local_proto}://${local_listen_arg} -> ${remote_url}"
-            start_gost_generic "$cmd" "$info"
+    local remote_url=""
+    case "$remote_proto" in
+        ws|wss) remote_url="${remote_proto}://${remote_host}:${remote_port}" ;;
+        http+ws|http+wss|socks5+ws|socks5+wss)
+            remote_url="${remote_proto}://"
+            [ -n "$remote_user" ] && remote_url="${remote_url}${remote_user}:${remote_pass}@"
+            remote_url="${remote_url}${remote_host}:${remote_port}"
             ;;
-        2)
-            configure_ssh "$local_listen" "$local_proto" "$local_listen_arg"
-            ;;
-        *)
-            echo -e "${RED}无效${NC}"; return 1
+        ss+ws|ss+wss)
+            remote_url="${remote_proto}://${remote_ss_method}:${remote_ss_pass}@${remote_host}:${remote_port}"
             ;;
     esac
+    local params=(); [ -n "$remote_path" ] && params+=("path=${remote_path}")
+    local query=$(build_query_string "${params[@]}")
+    local dns_query=$(gost_dns_arg "$dns_input")
+    local final_query=$(merge_queries "$query" "$dns_query")
+    remote_url="${remote_url}${final_query}"
+
+    local cmd="$GOST_BIN $local_listen -F $remote_url"
+    local info="链式代理: ${local_proto}://${local_listen_arg} -> ${remote_url}"
+    start_gost_generic "$cmd" "$info"
 }
 
 start_gost_legacy() {
@@ -672,6 +633,32 @@ start_gost_legacy() {
     fi
 }
 
+# 自定义命令
+custom_command() {
+    if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
+        echo -e "${RED}未检测到 GOST，请先安装。${NC}"
+        flush_input; read -n 1 -p "按任意键返回..."; return 1
+    fi
+
+    local ver=$(get_installed_gost_version)
+    echo -e "${GREEN}当前 GOST 版本: ${ver}${NC}"
+    echo -n -e "${YELLOW}你是否熟悉 GOST $(is_v3 && echo 'v3' || echo 'v2') 的命令语法？[y/N]: ${NC}"
+    read familiar; flush_input
+    if [[ ! "$familiar" =~ ^[Yy]$ ]]; then
+        echo -e "${RED}请先熟悉命令语法后再使用此功能。${NC}"
+        flush_input; read -n 1 -p "按任意键返回..."
+        return 1
+    fi
+
+    echo -e "${YELLOW}请输入完整的 GOST 命令行 (不需要包含 nohup 和重定向):${NC}"
+    echo -e "${YELLOW}示例: ${GOST_BIN} -L http://:8080${NC}"
+    read -e custom_cmd
+    flush_input
+    [ -z "$custom_cmd" ] && { echo -e "${RED}命令不能为空${NC}"; flush_input; read -n 1 -p "按任意键返回..."; return 1; }
+
+    start_gost_generic "$custom_cmd" "自定义命令"
+}
+
 configure_proxy() {
     local skip_confirm=$1
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
@@ -703,9 +690,10 @@ configure_proxy() {
     echo -e " 3) 自适应 (HTTP/SOCKS5)"
     echo -e " 4) Shadowsocks"
     echo -e " 5) WebSocket"
-    echo -e " 6) 链式代理"
-    echo -n -e "${YELLOW}请选择 [1-6]: ${NC}"; read protocol; flush_input
-    [[ ! "$protocol" =~ ^[1-6]$ ]] && protocol=3
+    echo -e " 6) 链式代理 (HTTP/SOCKS5 -> WS/WSS)"
+    echo -e " 7) 自定义命令"
+    echo -n -e "${YELLOW}请选择 [1-7]: ${NC}"; read protocol; flush_input
+    [[ ! "$protocol" =~ ^[1-7]$ ]] && protocol=3
 
     case $protocol in
         1|2|3|4)
@@ -770,6 +758,7 @@ configure_proxy() {
             ;;
         5) configure_websocket ;;
         6) configure_chain ;;
+        7) custom_command ;;
     esac
 
     echo -n -e "${YELLOW}开启开机自启？[y/N]: ${NC}"; read auto_start; flush_input
