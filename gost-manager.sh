@@ -633,7 +633,6 @@ start_gost_legacy() {
     fi
 }
 
-# 自定义命令
 custom_command() {
     if [ ! -f "$GOST_BIN" ] || [ ! -x "$GOST_BIN" ]; then
         echo -e "${RED}未检测到 GOST，请先安装。${NC}"
@@ -651,10 +650,16 @@ custom_command() {
     fi
 
     echo -e "${YELLOW}请输入完整的 GOST 命令行 (不需要包含 nohup 和重定向):${NC}"
-    echo -e "${YELLOW}示例: ${GOST_BIN} -L http://:8080${NC}"
+    echo -e "${YELLOW}示例: gost -L http://:8080${NC}"
+    echo -e "${YELLOW}示例: gost -L socks5://user:pass@:1080${NC}"
+    echo -e "${YELLOW}示例: gost -L relay://username:password@:12345${NC}"
     read -e custom_cmd
     flush_input
     [ -z "$custom_cmd" ] && { echo -e "${RED}命令不能为空${NC}"; flush_input; read -n 1 -p "按任意键返回..."; return 1; }
+
+    if [[ "$custom_cmd" == gost* ]]; then
+        custom_cmd="${GOST_BIN}${custom_cmd#gost}"
+    fi
 
     start_gost_generic "$custom_cmd" "自定义命令"
 }
