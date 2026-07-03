@@ -39,6 +39,11 @@ curl -fsSL https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads
 wget -q https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/main/gost-manager.sh -O ~/gost-manager.sh && chmod +x ~/gost-manager.sh && bash ~/gost-manager.sh
 ```
 
+运行过的快速命令
+```
+~/gost-manager.sh
+```
+
 初次使用流程
 
 1. 运行脚本后，会显示主菜单。
