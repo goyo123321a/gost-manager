@@ -44,38 +44,45 @@ wget -q https://raw.githubusercontent.com/goyo123321a/gost-manager/refs/heads/ma
 ~/gost-manager.sh
 ```
 
-初次使用流程
-
-1. 运行脚本后，会显示主菜单。
-2. 选择 1) 安装 GOST → 选择版本（v2 / v3）→ 选择具体版本号（直接回车默认安装第一个版本）。
-3. 安装完成后询问是否配置代理（直接回车默认 是）。
+1. 运行脚本后，显示主菜单。
+2. 选择 1) 安装 GOST → 选择版本（v2 或 v3）→ 选择具体版本号（直接回车默认安装第一个版本）。
+3. 安装完成后询问是否配置代理（直接回车默认为 是）。
 4. 按提示输入：
    · 端口：例如 1080
-   · 协议：推荐 3) 自适应（同时支持 HTTP 和 SOCKS5）
-   · 账号密码：默认 admin / 123456，可自定义
-5. 是否使用DNS出站
-6. 询问是否开启开机自启（输入 y 开启，直接回车默认 不开启）。
-7. 配置完成，代理即启动，并显示代理链接。
+   · 认证：询问是否需要认证，默认开启（账号 admin / 密码 123456），也可选择无认证
+   · 协议：推荐 3) 自适应 (HTTP/SOCKS5)
+   · 自定义 DNS（可选，支持 UDP/TCP/DoT/DoH 格式）
+5. 询问是否开启开机自启（输入 y 开启，直接回车默认不开启）。
+6. 配置完成，代理即启动，并显示代理链接。
 
 📖 使用说明
 
 主菜单选项
 
 选项 功能
-1 安装 GOST（可选择 v2 或 v3，并从中选择版本）
-2 配置代理（重新设置端口、协议、账号密码）
+1 安装 GOST（可选择 v2 或 v3，并从列表中挑选具体版本）
+2 配置代理（重新设置代理类型、端口、认证、DNS 等）
 3 查看当前状态（已安装版本、进程 PID、运行状态）
 4 卸载 GOST（停止进程、删除目录、清除自启任务）
 5 更新脚本本身（从 GitHub 拉取最新版本）
+6 查看节点信息（显示保存的代理链接）
+7 停止 GOST 进程
+8 查看运行日志（支持实时跟踪）
 0 退出脚本
 
 代理协议说明
 
-协议选项 说明 示例 URL
-1) HTTP 标准 HTTP 代理 http://user:pass@ip:port
-2) SOCKS5 标准 SOCKS5 代理 socks5://user:pass@ip:port
-3) 自适应 同一端口同时支持 HTTP 和 SOCKS5（推荐） http://user:pass@ip:port 或 socks5://user:pass@ip:port
-
+协议 说明 示例 URL
+1) HTTP 标准 HTTP 代理 http://admin:123456@192.168.1.1:8080
+2) SOCKS5 标准 SOCKS5 代理 socks5://admin:123456@192.168.1.1:1080
+3) 自适应 同一端口同时支持 HTTP 和 SOCKS5（推荐） http://admin:123456@192.168.1.1:8888 或 socks5://...
+4) Shadowsocks 基于 shadowsocks 协议，支持 AEAD 加密 ss://aes-256-gcm:password@192.168.1.1:8388#GOST-SS
+5) WebSocket 纯 WS 隧道，支持自定义路径 ws://192.168.1.1:8080/ws
+ v3 组合模式：HTTP over WS http+ws://192.168.1.1:8080/ws
+ v3 组合模式：SOCKS5 over WS socks5+ws://admin:123456@192.168.1.1:8080/ws
+ v3 组合模式：SS over WS ss+ws://aes-256-gcm:123456@192.168.1.1:8080/ws
+6) 链式代理 本地 HTTP/SOCKS5 → 远程 WS/WSS http://admin:123456@:3128 -> socks5+ws://node:443?path=/ws
+7) 自定义命令 直接输入完整 GOST 命令行 gost -L http://:8080?dns=8.8.8.8
 开机自启机制
 
 · 在 ~/GOST/ 目录下生成 keepalive.sh 脚本。
@@ -114,7 +121,8 @@ ps aux | grep gost
 🌍 支持的系统与环境
 
 系统 版本 架构
-Linux glibc / musl (Alpine) amd64, arm64, armv7, 386
+Linux (glibc) 任意 amd64, arm64, armv7, 386
+Linux (musl, 如 Alpine) 任意 amd64, arm64, armv7, 386 * 
 FreeBSD 12+ amd64, 386
 macOS (Darwin) 10.15+ amd64, arm64
 Windows (WSL/原生) 理论支持（未测试） amd64, 386
@@ -151,6 +159,7 @@ Q5: 脚本更新后如何使用新功能？
 📝 版本历史
 
 版本 日期 更新内容
+v3.0 2026-06-13 全面适配 v3 语法；新增链式代理、WebSocket 组合模式、自定义命令；修复多项 bug
 v2.5 2026-06-08 增加 v3 稳定版过滤（去除 nightly/rc）；默认配置代理（Y/n）；版本选择支持默认第一个
 v2.4 2026-06-07 修复 v2.11.5 下载失败（增加 armv8 备选 URL）；适配 FreeBSD 系统
 v2.3 2026-06-06 增加脚本自更新功能；优化架构检测
