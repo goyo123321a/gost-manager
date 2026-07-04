@@ -21,9 +21,9 @@
 ```
 
 ### GOST-V2[GitHub仓库](https://github.com/ginuerzh/gost)
+### [GOST-v2文档](https://v2.gost.run/getting-started/)
 ### GOST-V3[GitHub仓库](https://github.com/go-gost/gost)
-### [GOST介绍](https://v2.gost.run/getting-started/)
-
+### [GOST-v3文档](https://gost.run/getting-started/quick-start/)
 
 ## 🚀 快速开始
 
