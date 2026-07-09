@@ -306,12 +306,17 @@ ensure_leading_slash() {
 
 # ---------- DNS 代理配置 ----------
 configure_dns() {
-    local listen_addr=""
+    echo -e "${YELLOW}DNS 代理模式:${NC}"
+    echo -e " 1) 直接 DoH (本地加密查询公共 DNS)"
+    echo -e " 2) 转发至远程服务器 (通过隧道交给远程解析)"
+    echo -n -e "${YELLOW}请选择 [1-2] (默认 1): ${NC}"
+    read dns_mode; flush_input
+    [[ -z "$dns_mode" ]] && dns_mode=1
+
+    local bind_ip=""
     echo -n -e "${YELLOW}监听地址 (默认 127.0.0.1，留空监听所有接口): ${NC}"
     read bind_ip; flush_input
-    if [ -z "$bind_ip" ]; then
-        bind_ip="127.0.0.1"
-    fi
+    [ -z "$bind_ip" ] && bind_ip="127.0.0.1"
 
     local port
     while true; do
@@ -321,47 +326,58 @@ configure_dns() {
         echo -e "${RED}无效端口${NC}"
     done
 
+    if [ "$dns_mode" = "2" ]; then
+        # 转发模式：本地 dns:// 监听，通过 -F 转发到远程
+        echo -e "${YELLOW}远程转发地址格式，例如:${NC}"
+        echo -e "  socks5+wss://user:pass@your-vps.com:443?path=/dns"
+        echo -e "  relay+wss://your-vps.com:443?path=/dns"
+        echo -e "  http+tls://user:pass@vps:8443"
+        echo -n -e "${YELLOW}远程转发地址: ${NC}"
+        read remote_forward; flush_input
+        [ -z "$remote_forward" ] && { echo -e "${RED}远程地址不能为空${NC}"; return 1; }
+
+        local listen_addr="${bind_ip}:${port}"
+        local cmd="$GOST_BIN -L dns://${listen_addr} -F $remote_forward"
+        local info="DNS 代理 (转发模式): ${listen_addr} -> ${remote_forward}"
+        start_gost_generic "$cmd" "$info"
+        echo -e "${YELLOW}启动后请将系统 DNS 设置为 ${bind_ip}:${port}${NC}"
+        return
+    fi
+
+    # 直接 DoH 模式
     echo -n -e "${YELLOW}上游 DoH 地址 (默认 https://doh.pub/dns-query): ${NC}"
     read doh_url; flush_input
     [ -z "$doh_url" ] && doh_url="https://doh.pub/dns-query"
 
-    # 提取 DoH 域名用于 hosts 提示
     local doh_domain=$(echo "$doh_url" | sed -E 's|https?://([^/]+).*|\1|')
     echo -e "${YELLOW}重要提示：为避免 DNS 污染，请先在 hosts 文件中添加：${NC}"
     echo -e "${GREEN}120.53.53.53 ${doh_domain}${NC}  (请将 IP 替换为 ${doh_domain} 的真实 IP)"
 
-    # DNS 缓存
     local cache_enabled=""
     echo -n -e "${YELLOW}是否启用 DNS 缓存？[y/N]: ${NC}"
     read use_cache; flush_input
     local cache_value=""
     if [[ "$use_cache" =~ ^[Yy]$ ]]; then
-        echo -n -e "${YELLOW}缓存时间 (默认 60s，例如 60s, 300s, 5m): ${NC}"
+        echo -n -e "${YELLOW}缓存时间 (默认 60s): ${NC}"
         read cache_value; flush_input
         [ -z "$cache_value" ] && cache_value="60s"
     fi
 
-    # 构建查询参数
     local params=()
     [ -n "$doh_url" ] && params+=("dns=${doh_url}")
     [ -n "$cache_value" ] && params+=("cache=${cache_value}")
-
     local query=$(build_query_string "${params[@]}")
 
-    if [ "$bind_ip" = "0.0.0.0" ] || [ -z "$bind_ip" ]; then
-        listen_addr=":${port}"
-    else
-        listen_addr="${bind_ip}:${port}"
-    fi
-
+    local listen_addr="${bind_ip}:${port}"
     local cmd="$GOST_BIN -L dns://${listen_addr}${query}"
-    local info="DNS 代理: ${listen_addr} -> ${doh_url}"
+    local info="DNS 代理 (DoH): ${listen_addr} -> ${doh_url}"
     [ -n "$cache_value" ] && info="${info} (缓存: ${cache_value})"
 
     start_gost_generic "$cmd" "$info"
     echo -e "${YELLOW}启动后请将系统 DNS 设置为 ${bind_ip}:${port}${NC}"
 }
 
+# ---------- WebSocket ----------
 configure_websocket() {
     local port
     while true; do
@@ -477,6 +493,7 @@ configure_websocket() {
     start_gost_generic "$cmd" "$info"
 }
 
+# ---------- 链式代理 ----------
 configure_chain() {
     echo -e "${BLUE}本地代理类型:${NC} 1) HTTP  2) SOCKS5"
     echo -n -e "${YELLOW}选择 [1-2]: ${NC}"; read local_type; flush_input
@@ -756,7 +773,7 @@ configure_proxy() {
     echo -e " 5) WebSocket"
     echo -e " 6) 链式代理 (HTTP/SOCKS5 -> WS/WSS)"
     echo -e " 7) 自定义命令"
-    echo -e " 8) DNS 代理 (DoH 隧道)"
+    echo -e " 8) DNS 代理 (DoH / 转发)"
     echo -n -e "${YELLOW}请选择 [1-8]: ${NC}"; read protocol; flush_input
     [[ ! "$protocol" =~ ^[1-8]$ ]] && protocol=3
 
